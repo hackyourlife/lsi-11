@@ -98,7 +98,10 @@ void KD11Reset(KD11* kd11)
 
 #define	READ(addr)		(bus->read(bus->user, (addr)))
 #define	WRITE(addr, val)	(bus->write(bus->user, (addr), (val)))
-#define	CHECK()			{ if(kd11->trap) return; }
+#define	CHECK()			{ \
+	if(kd11->trap && kd11->trap <= 010) \
+		return; \
+	}
 
 static void KD11ODTClear(KD11ODT* odt)
 {
@@ -356,7 +359,10 @@ void KD11ODTStep(KD11* kd11, QBUS* bus)
 	}
 }
 
-#define	CHECKREAD()		{ if(kd11->trap) return 0; }
+#define	CHECKREAD()		{ \
+	if(kd11->trap && kd11->trap <= 010) \
+		return 0; \
+	}
 
 u16 KD11CPUReadW(KD11* kd11, QBUS* bus, u16 dst, u16 mode, int inc)
 {
@@ -686,17 +692,17 @@ u16 KD11CPUGetAddr(KD11* kd11, QBUS* bus, u16 dst, u16 mode)
 }
 
 #define	CPUREADW(rn, mode)	KD11CPUReadW(kd11, bus, rn, mode, 1); \
-				if(kd11->trap) return
+				CHECK()
 #define	CPUREADB(rn, mode)	KD11CPUReadB(kd11, bus, rn, mode, 1); \
-				if(kd11->trap) return
+				CHECK()
 #define	CPUREADNW(rn, mode)	KD11CPUReadW(kd11, bus, rn, mode, 0); \
-				if(kd11->trap) return
+				CHECK()
 #define	CPUREADNB(rn, mode)	KD11CPUReadB(kd11, bus, rn, mode, 0); \
-				if(kd11->trap) return
+				CHECK()
 #define CPUWRITEW(rn, mode, v)	KD11CPUWriteW(kd11, bus, rn, mode, v); \
-				if(kd11->trap) return
+				CHECK()
 #define CPUWRITEB(rn, mode, v)	KD11CPUWriteB(kd11, bus, rn, mode, v); \
-				if(kd11->trap) return
+				CHECK()
 
 typedef union {
 	float	f32;
@@ -1552,9 +1558,10 @@ void KD11HandleTraps(KD11* kd11, QBUS* bus)
 		}
 	}
 
-	/* trap instructions have lowest priority */
-	if(kd11->trap && (trap == 030 || trap == 034)) {
-		u16 tmp = trap;
+	/* trap instructions have highest priority */
+	if((kd11->trap == 030 || kd11->trap == 034)
+			&& !(trap == 030 || trap == 034)) {
+		u16 tmp = kd11->trap;
 		kd11->trap = trap;
 		trap = tmp;
 	}

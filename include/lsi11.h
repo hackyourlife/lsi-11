@@ -36,6 +36,10 @@
 /* QBUS interrupt request delay jitter */
 #define	QBUS_DELAY_JITTER	10
 
+/* LTC rate */
+#define	LTC_RATE		50
+#define	LTC_TIME		(1.0 / LTC_RATE)
+
 typedef struct {
 	u16	addr;
 	u16	val;
@@ -117,6 +121,7 @@ typedef struct {
 	u16	option;
 	u16	display;
 	u16	ltc;
+	float	time;
 } BDV11;
 
 typedef struct {
@@ -149,6 +154,7 @@ void DLV11JSend(DLV11J* dlv, int channel, unsigned char c);
 
 void BDV11Init(BDV11* bdv);
 void BDV11Destroy(BDV11* bdv);
+void BDV11Step(BDV11* bdv, float dt);
 
 void RXV21Init(RXV21* rx);
 void RXV21Destroy(RXV21* rx);
@@ -169,5 +175,6 @@ void LSI11Step(LSI11* lsi);
 
 /* LSI-11 disassembler */
 int  LSI11Disassemble(const u16* insn, u16 pc, char* buf);
+int  LSI11InstructionLength(const u16* insn);
 
 #endif

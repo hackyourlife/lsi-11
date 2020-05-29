@@ -16,7 +16,9 @@ int TRACEOpen(TRACE* trace, const char* filename)
 		return -1;
 	}
 	trace->step = 0;
-	trace->flags = TRACE_WRITE;
+	memset(trace->last_r, 0, 7 * sizeof(u16));
+	trace->last_psw = 0;
+	trace->flags = TRACE_WRITE | TRACE_FIRST_Z;
 	fwrite(&header, 6, 1, trace->file);
 	return 0;
 }
@@ -30,7 +32,6 @@ void TRACEStep(TRACE* trace, u16* r, u16 psw, u16* insn)
 {
 	int i;
 	char buf[64];
-	TRACE_CPU rec;
 
 	if(trace->flags & TRACE_PRINT) {
 #define	PSW_GET(x)	(psw & (x))
@@ -61,18 +62,79 @@ void TRACEStep(TRACE* trace, u16* r, u16 psw, u16* insn)
 	}
 
 	if(trace->flags & TRACE_WRITE) {
-		rec.magic = U32B(MAGIC_CPU0);
-		rec.psw = U16B(psw);
-		rec.step = U64B(trace->step++);
-		memcpy(&rec.insn, insn, 6);
-		memcpy(&rec.r, r, 16);
-		for(i = 0; i < 3; i++) {
-			rec.insn[i] = U16B(rec.insn[i]);
+		if((trace->flags & TRACE_COMPRESS) && !(trace->flags & TRACE_FIRST_Z)) {
+			int len = LSI11InstructionLength(insn);
+			int cnt = len;
+			int off = 0;
+			u16 mask = 0;
+			for(i = 0; i < 7; i++) {
+				if(trace->last_r[i] != r[i]) {
+					mask |= (1 << i);
+					cnt++;
+				}
+			}
+			if(trace->last_psw != psw) {
+				mask |= 0x80;
+				cnt++;
+			}
+
+			if(trace->step < 0xFFFFFFFFL) {
+				TRACE_CPUZS rec;
+				rec.magic = U32B(MAGIC_CPUZ);
+				rec.step = U32B((u32) trace->step++);
+				rec.pc = U16B(r[7]);
+				rec.mask = U16B((len << 8) | mask);
+				for(i = 0; i < len; i++) {
+					rec.data[off++] = U16B(insn[i]);
+				}
+				for(i = 0; i < 7; i++) {
+					if(trace->last_r[i] != r[i]) {
+						rec.data[off++] = U16B(r[i]);
+						trace->last_r[i] = r[i];
+					}
+				}
+				if(trace->last_psw != psw) {
+					rec.data[off++] = U16B(psw);
+					trace->last_psw = psw;
+				}
+				fwrite(&rec, 12 + cnt * 2, 1, trace->file);
+			} else {
+				TRACE_CPUZ rec;
+				rec.magic = U32B(MAGIC_CPUZ);
+				rec.step = U64B(trace->step++);
+				rec.pc = U16B(r[7]);
+				rec.mask = U16B(0x8000 | (len << 8) | mask);
+				for(i = 0; i < len; i++) {
+					rec.data[off++] = U16B(insn[i]);
+				}
+				for(i = 0; i < 7; i++) {
+					if(trace->last_r[i] != r[i]) {
+						rec.data[off++] = U16B(r[i]);
+						trace->last_r[i] = r[i];
+					}
+				}
+				if(trace->last_psw != psw) {
+					rec.data[off++] = U16B(psw);
+					trace->last_psw = psw;
+				}
+				fwrite(&rec, 16 + cnt * 2, 1, trace->file);
+			}
+		} else {
+			TRACE_CPU rec;
+			trace->flags &= ~TRACE_FIRST_Z;
+			rec.magic = U32B(MAGIC_CPU0);
+			rec.psw = U16B(psw);
+			rec.step = U64B(trace->step++);
+			memcpy(&rec.insn, insn, 6);
+			memcpy(&rec.r, r, 16);
+			for(i = 0; i < 3; i++) {
+				rec.insn[i] = U16B(rec.insn[i]);
+			}
+			for(i = 0; i < 8; i++) {
+				rec.r[i] = U16B(rec.r[i]);
+			}
+			fwrite(&rec, sizeof(rec), 1, trace->file);
 		}
-		for(i = 0; i < 8; i++) {
-			rec.r[i] = U16B(rec.r[i]);
-		}
-		fwrite(&rec, sizeof(rec), 1, trace->file);
 	}
 }
 

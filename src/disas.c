@@ -597,3 +597,155 @@ int LSI11Disassemble(const u16* insn, u16 pc, char* buf)
 	WRITEC(']');
 	return 1;
 }
+
+#define OP1LEN()	LSI11OperandLength(insn1->rn, insn1->mode) + 1
+#define OP2LEN()	LSI11OperandLength(insn2->src_rn, insn2->src_mode) + \
+			LSI11OperandLength(insn2->dst_rn, insn2->dst_mode) + 1
+
+int LSI11OperandLength(const u8 rn, const u8 mode)
+{
+	if(rn == 7 && ((mode & 6) == 2 || (mode & 6) == 6)) {
+		return 1;
+	}
+	switch(mode) {
+		default:
+		case 0:
+		case 1:
+		case 3:
+		case 2:
+		case 5:
+		case 4:
+			return 0;
+		case 6:
+		case 7:
+			return 1;
+	}
+}
+
+int LSI11InstructionLength(const u16* insn)
+{
+	u16 opcd = *insn;
+	KD11INSN1* insn1 = (KD11INSN1*) insn;
+	KD11INSN2* insn2 = (KD11INSN2*) insn;
+
+	switch(opcd & 0177700) {
+		case 0005000: /* CLR */
+		case 0105000: /* CLRB */
+		case 0005100: /* COM */
+		case 0105100: /* COMB */
+		case 0005200: /* INC */
+		case 0105200: /* INCB */
+		case 0005300: /* DEC */
+		case 0105300: /* DECB */
+		case 0005400: /* NEG */
+		case 0105400: /* NEGB */
+		case 0005700: /* TST */
+		case 0105700: /* TSTB */
+		case 0006200: /* ASR */
+		case 0106200: /* ASRB */
+		case 0006300: /* ASL */
+		case 0106300: /* ASLB */
+		case 0006000: /* ROR */
+		case 0106000: /* RORB */
+		case 0006100: /* ROL */
+		case 0106100: /* ROLB */
+		case 0000300: /* SWAB */
+		case 0005500: /* ADC */
+		case 0105500: /* ADCB */
+		case 0005600: /* SBC */
+		case 0105600: /* SBCB */
+		case 0006700: /* SXT */
+		case 0106700: /* MFPS */
+		case 0106400: /* MTPS */
+		case 0000100: /* JMP */
+			return OP1LEN();
+		case 0006400: /* MARK */
+			return 1;
+	}
+
+	switch(opcd & 0170000) {
+		case 0010000: /* MOV */
+		case 0110000: /* MOVB */
+		case 0020000: /* CMP */
+		case 0120000: /* CMPB */
+		case 0060000: /* ADD */
+		case 0160000: /* SUB */
+		case 0030000: /* BIT */
+		case 0130000: /* BITB */
+		case 0040000: /* BIC */
+		case 0140000: /* BICB */
+		case 0050000: /* BIS */
+		case 0150000: /* BISB */
+			return OP2LEN();
+	}
+
+	switch(opcd & 0177000) {
+		case 0074000: /* XOR */
+		case 0004000: /* JSR */
+			return OP1LEN();
+		case 0077000: /* SOB */
+			return 1;
+		case 0070000: /* MUL */
+		case 0071000: /* DIV */
+		case 0072000: /* ASH */
+		case 0073000: /* ASHC */
+			return OP1LEN();
+	}
+
+	switch(opcd & 0177770) {
+		case 0000200: /* RTS */
+		case 0075000: /* FADD */
+		case 0075010: /* FSUB */
+		case 0075020: /* FMUL */
+		case 0075030: /* FDIV */
+			return 1;
+	}
+
+	switch(opcd & 0177400) {
+		case 0000400: /* BR */
+		case 0001000: /* BNE */
+		case 0001400: /* BEQ */
+		case 0100000: /* BPL */
+		case 0100400: /* BMI */
+		case 0102000: /* BVC */
+		case 0102400: /* BVS */
+		case 0103000: /* BCC */
+		case 0103400: /* BCS */
+		case 0002000: /* BGE */
+		case 0002400: /* BLT */
+		case 0003000: /* BGT */
+		case 0003400: /* BLE */
+		case 0101000: /* BHI */
+		case 0101400: /* BLOS */
+		case 0104000: /* EMT */
+		case 0104400: /* TRAP */
+			return 1;
+	}
+
+	switch(opcd) {
+		case 0000003: /* BPT */
+		case 0000004: /* IOT */
+		case 0000002: /* RTI */
+		case 0000006: /* RTT */
+		case 0000000: /* HALT */
+		case 0000001: /* WAIT */
+		case 0000005: /* RESET */
+		case 0000240: /* NOP */
+		case 0000241: /* CLC */
+		case 0000242: /* CLV */
+		case 0000243: /* CLVC */
+		case 0000244: /* CLZ */
+		case 0000250: /* CLN */
+		case 0000257: /* CCC */
+		case 0000260: /* NOP1 */
+		case 0000261: /* SEC */
+		case 0000262: /* SEV */
+		case 0000263: /* SEVC */
+		case 0000264: /* SEZ */
+		case 0000270: /* SEN */
+		case 0000277: /* SCC */
+			return 1;
+	}
+
+	return 1;
+}

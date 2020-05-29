@@ -6,6 +6,7 @@
 #include "types.h"
 
 #define	MAGIC_CPU0		0x43505530
+#define	MAGIC_CPUZ		0x4350555a
 #define	MAGIC_CPU1		0x43505531
 #define	MAGIC_BUS0		0x42555330
 #define	MAGIC_BUS1		0x42555331
@@ -64,6 +65,8 @@
 #define	TRACE_WRITE		1
 #define	TRACE_IGNORE_BUS	2
 #define	TRACE_PRINT		4
+#define	TRACE_COMPRESS		8
+#define	TRACE_FIRST_Z		16
 
 #define	TRCSETIGNBUS()	(trc.flags |= TRACE_IGNORE_BUS)
 #define	TRCCLRIGNBUS()	(trc.flags &= ~TRACE_IGNORE_BUS)
@@ -107,6 +110,22 @@ typedef struct {
 	u32	pad;
 	u64	step;
 } TRACE_CPU;
+
+typedef struct {
+	u32	magic;
+	u16	pc;
+	u16	mask;
+	u64	step;
+	u16	data[11];
+} TRACE_CPUZ;
+
+typedef struct {
+	u32	magic;
+	u16	pc;
+	u16	mask;
+	u32	step;
+	u16	data[11];
+} TRACE_CPUZS;
 
 typedef struct {
 	u32	magic;
@@ -200,6 +219,8 @@ typedef struct {
 	FILE*	file;
 	u64	step;
 	int	flags;
+	u16	last_psw;
+	u16	last_r[7];
 } TRACE;
 
 extern TRACE trc;

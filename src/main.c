@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <sys/time.h>
 #include <sys/types.h>
 #include <unistd.h>
@@ -106,6 +107,9 @@ int main(int argc, char** argv)
 	fd_set fds;
 	struct timeval tv;
 
+	struct timespec now;
+	struct timespec last;
+
 	FILE* floppy_file;
 	u8* floppy;
 
@@ -117,6 +121,7 @@ int main(int argc, char** argv)
 	int halt = 0;
 	int bootstrap = 0;
 	const char* trace_file = NULL;
+	int compress = 0;
 
 #ifndef DEBUG
 	if(tcgetattr(0, &original_tio) == -1) {
@@ -138,6 +143,8 @@ int main(int argc, char** argv)
 			halt = 1;
 		} else if(!strcmp("-b", *argv)) {
 			bootstrap = 1;
+		} else if(!strcmp("-z", *argv)) {
+			compress = 1;
 		} else if(!strcmp("-l", *argv) && argc > 1) {
 			load_file = argv[1];
 			argc--;
@@ -181,17 +188,20 @@ int main(int argc, char** argv)
 
 	dlv11.channel[3].receive = console_print;
 
+	if(trace_file) {
+		TRCINIT(trace_file);
+		if(compress) {
+			trc.flags |= TRACE_COMPRESS;
+		}
+	}
+	/* trc.flags |= TRACE_PRINT; */
+
 	LSI11Init(&lsi);
 	LSI11InstallModule(&lsi, 1, &msv11.module);
 	LSI11InstallModule(&lsi, 2, &rxv21.module);
 	LSI11InstallModule(&lsi, 3, &dlv11.module);
 	LSI11InstallModule(&lsi, 4, &bdv11.module);
 	LSI11Reset(&lsi);
-
-	if(trace_file) {
-		TRCINIT(trace_file);
-	}
-	/* trc.flags |= TRACE_PRINT; */
 
 	if(bootstrap) {
 		LSI11ConsoleSendString(&dlv11, odt_input);
@@ -250,7 +260,9 @@ int main(int argc, char** argv)
 					/* LSI11ConsoleSendString(&dlv11, "P"); */
 					lsi.cpu.state = 1;
 				} else {
-					LSI11ConsoleSendString(&dlv11, "200G");
+					/* LSI11ConsoleSendString(&dlv11, "200G"); */
+					lsi.cpu.r[7] = 0200;
+					lsi.cpu.state = 1;
 				}
 				break;
 			}
@@ -277,13 +289,18 @@ int main(int argc, char** argv)
 
 	running = 1;
 
-	if(!strcmp(argv[1], "-h")) {
+	if(halt) {
 		lsi.cpu.state = 0;
 	} else if(!bootstrap && !halt && !load_file) {
 		lsi.cpu.state = 1;
 	}
 
+	clock_gettime(CLOCK_MONOTONIC, &last);
+
 	while(running) {
+		unsigned int i;
+		double dt;
+
 		FD_ZERO(&fds);
 		FD_SET(0, &fds);
 		tv.tv_sec = 0;
@@ -298,7 +315,15 @@ int main(int argc, char** argv)
 #endif
 			DLV11JSend(&dlv11, 3, c);
 		}
-		LSI11Step(&lsi);
+
+		for(i = 0; i < 1000; i++)
+			LSI11Step(&lsi);
+
+		clock_gettime(CLOCK_MONOTONIC, &now);
+		dt = (now.tv_sec - last.tv_sec) +
+			(now.tv_nsec - last.tv_nsec) / 1e9;
+		last = now;
+		BDV11Step(&bdv11, dt);
 	}
 
 	free(floppy);

@@ -134,7 +134,7 @@ void BDV11Write(void* self, u16 address, u16 value)
 			bdv->display = value;
 			break;
 		case 0177546:
-			bdv->ltc = value;
+			bdv->ltc = value & 040;
 			break;
 	}
 }
@@ -177,4 +177,21 @@ void BDV11Init(BDV11* bdv)
 void BDV11Destroy(BDV11* bdv)
 {
 	/* nothing */
+}
+
+void BDV11Step(BDV11* bdv, float dt)
+{
+	if(bdv->ltc & 040) {
+		bdv->time += dt;
+		if(bdv->time >= LTC_TIME) {
+			QBUS* bus = bdv->module.bus;
+			bus->interrupt(bus, 0100);
+			bdv->time -= LTC_TIME;
+			if(bdv->time >= LTC_TIME) {
+				bdv->time = 0;
+			}
+		}
+	} else {
+		bdv->time = 0;
+	}
 }
