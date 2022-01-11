@@ -156,6 +156,8 @@ void BDV11Reset(void* self)
 {
 	BDV11* bdv = (BDV11*) self;
 
+	bdv->module.irq	= 0;
+
 	bdv->pcr = 0;
 	bdv->scratch = 0;
 	bdv->display = 0;
@@ -172,6 +174,8 @@ void BDV11Init(BDV11* bdv)
 	bdv->module.write = BDV11Write;
 	bdv->module.responsible = BDV11Responsible;
 	bdv->module.reset = BDV11Reset;
+
+	bdv->module.irq	= 0;
 }
 
 void BDV11Destroy(BDV11* bdv)
@@ -183,9 +187,15 @@ void BDV11Step(BDV11* bdv, float dt)
 {
 	if(bdv->ltc & 0100) {
 		bdv->time += dt;
+		if(bdv->module.irq) {
+			QBUS* bus = bdv->module.bus;
+			if(bus->interrupt(bus, bdv->module.irq))
+				bdv->module.irq = 0;
+		}
 		if(bdv->time >= LTC_TIME) {
 			QBUS* bus = bdv->module.bus;
-			bus->interrupt(bus, 0100);
+			if(!bus->interrupt(bus, 0100))
+				bdv->module.irq = 0100;
 			bdv->time -= LTC_TIME;
 			if(bdv->time >= LTC_TIME) {
 				bdv->time = 0;

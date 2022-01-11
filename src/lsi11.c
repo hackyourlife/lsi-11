@@ -113,6 +113,8 @@ void LSI11Init(LSI11* lsi)
 {
 	KD11Init(&lsi->cpu);
 	lsi->bus.trap = 0;
+	lsi->bus.delay = 0;
+	lsi->bus.irq = 0;
 	lsi->bus.user = (void*) lsi;
 	lsi->bus.read = LSI11Read;
 	lsi->bus.write = LSI11Write;

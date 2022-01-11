@@ -425,6 +425,7 @@ void RXV21Reset(void* self)
 	rx->rx2cs = RX_RX02 | RX_DONE;
 	rx->rx2es = RX2ES_DEFAULT;
 	rx->rx2db = rx->rx2es;
+	rx->module.irq = 0;
 }
 
 void RXV21Init(RXV21* rx)
