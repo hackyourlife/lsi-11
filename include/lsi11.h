@@ -78,6 +78,7 @@ typedef struct {
 	void	(*write)(void* self, u16 addr, u16 value);
 	u8	(*responsible)(void* self, u16 addr);
 	void	(*reset)(void* self);
+	int	irq;
 } QBUSMod;
 
 typedef struct {
@@ -151,6 +152,7 @@ void MSV11DDestroy(MSV11D* msv);
 void DLV11JInit(DLV11J* dlv);
 void DLV11JDestroy(DLV11J* dlv);
 void DLV11JSend(DLV11J* dlv, int channel, unsigned char c);
+void DLV11JStep(DLV11J* dlv);
 
 void BDV11Init(BDV11* bdv);
 void BDV11Destroy(BDV11* bdv);
@@ -159,6 +161,7 @@ void BDV11Step(BDV11* bdv, float dt);
 void RXV21Init(RXV21* rx);
 void RXV21Destroy(RXV21* rx);
 void RXV21SetData(RXV21* rx, u8* data);
+void RXV21Step(RXV21* rx);
 
 /* KD11 subroutines */
 void KD11Init(KD11* kd11);

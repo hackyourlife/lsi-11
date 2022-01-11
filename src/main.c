@@ -110,6 +110,7 @@ int main(int argc, char** argv)
 	struct timespec now;
 	struct timespec last;
 
+	const char* self = *argv;
 	FILE* floppy_file;
 	u8* floppy;
 
@@ -123,17 +124,14 @@ int main(int argc, char** argv)
 	const char* trace_file = NULL;
 	int compress = 0;
 
+	int exit_on_halt = 0;
+
 #ifndef DEBUG
 	if(tcgetattr(0, &original_tio) == -1) {
 		printf("Failed to retrieve TTY configuration\n");
 		return 1;
 	}
 #endif
-
-	MSV11DInit(&msv11);
-	DLV11JInit(&dlv11);
-	BDV11Init(&bdv11);
-	RXV21Init(&rxv21);
 
 	argc--;
 	argv++;
@@ -145,6 +143,8 @@ int main(int argc, char** argv)
 			bootstrap = 1;
 		} else if(!strcmp("-z", *argv)) {
 			compress = 1;
+		} else if(!strcmp("-x", *argv)) {
+			exit_on_halt = 1;
 		} else if(!strcmp("-l", *argv) && argc > 1) {
 			load_file = argv[1];
 			argc--;
@@ -159,11 +159,30 @@ int main(int argc, char** argv)
 			argv++;
 		} else if(**argv != '-') {
 			load_file = *argv;
+		} else if(!strcmp("--help", *argv)) {
+			printf("Usage: %s [OPTIONS] [FILE]\n"
+					"\n"
+					"OPTIONS\n"
+					"  -h              Halt CPU\n"
+					"  -x              Exit on HALT\n"
+					"  -b              Enter RX02 double density bootstrap program\n"
+					"  -l file.bin     Load file.bin in absolute loader format\n"
+					"  -f file.rx2     Load RX02 floppy image from file.rx2\n"
+					"  -t file.trc     Record execution trace to file.trc\n"
+					"  -z              Use delta compression fo rexecution trace\n"
+					"\n"
+					"The optional last argument FILE is equivalent to -f file\n", self);
+			return 0;
 		} else {
 			printf("Unknown option: %s\n", *argv);
 			return 1;
 		}
 	}
+
+	MSV11DInit(&msv11);
+	DLV11JInit(&dlv11);
+	BDV11Init(&bdv11);
+	RXV21Init(&rxv21);
 
 	floppy = (u8*) malloc(77 * 26 * 256);
 	if(!floppy) {
@@ -319,11 +338,21 @@ int main(int argc, char** argv)
 		for(i = 0; i < 1000; i++)
 			LSI11Step(&lsi);
 
+		if(exit_on_halt && lsi.cpu.state == 0) {
+			/* make sure ODT finishes its prompt */
+			for(i = 0; i < 32; i++)
+				LSI11Step(&lsi);
+
+			running = 0;
+		}
+
 		clock_gettime(CLOCK_MONOTONIC, &now);
 		dt = (now.tv_sec - last.tv_sec) +
 			(now.tv_nsec - last.tv_nsec) / 1e9;
 		last = now;
 		BDV11Step(&bdv11, dt);
+		DLV11JStep(&dlv11);
+		RXV21Step(&rxv21);
 	}
 
 	free(floppy);

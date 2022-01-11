@@ -22,6 +22,8 @@
 #define	RCSR_WR_MASK		(RCSR_RCVR_INT | RCSR_READER_ENABLE)
 #define	XCSR_WR_MASK		(XCSR_TRANSMIT_INT | XCSR_TRANSMIT_BREAK)
 
+#define	IRQ(x)			if(!bus->interrupt(bus, x)) dlv->module.irq = (x)
+
 void DLV11JReadChannel(DLV11J* dlv, int channel)
 {
 	DLV11Ch* ch = &dlv->channel[channel];
@@ -35,7 +37,7 @@ void DLV11JReadChannel(DLV11J* dlv, int channel)
 			ch->rcsr |= RCSR_RCVR_DONE;
 			if(ch->rcsr & RCSR_RCVR_INT) {
 				QBUS* bus = dlv->module.bus;
-				bus->interrupt(bus, ch->vector);
+				IRQ(ch->vector);
 			}
 		} else {
 			ch->rcsr &= ~RCSR_RCVR_DONE;
@@ -58,7 +60,7 @@ void DLV11JWriteChannel(DLV11J* dlv, int channel)
 	ch->xcsr |= XCSR_TRANSMIT_READY;
 	if(ch->xcsr & XCSR_TRANSMIT_INT) {
 		QBUS* bus = dlv->module.bus;
-		bus->interrupt(bus, ch->vector + 4);
+		IRQ(ch->vector + 4);
 	}
 }
 
@@ -89,7 +91,7 @@ void DLV11JWriteRCSR(DLV11J* dlv, int n, u16 value)
 	if((value & RCSR_RCVR_INT) && !(old & RCSR_RCVR_INT)
 			&& (ch->rcsr & RCSR_RCVR_DONE)) {
 		QBUS* bus = dlv->module.bus;
-		bus->interrupt(bus, ch->vector);
+		IRQ(ch->vector);
 	}
 }
 
@@ -101,7 +103,7 @@ void DLV11JWriteXCSR(DLV11J* dlv, int n, u16 value)
 	if((value & XCSR_TRANSMIT_INT) && !(old & XCSR_TRANSMIT_INT)
 			&& (ch->xcsr & XCSR_TRANSMIT_READY)) {
 		QBUS* bus = dlv->module.bus;
-		bus->interrupt(bus, ch->vector + 4);
+		IRQ(ch->vector + 4);
 	}
 }
 
@@ -148,6 +150,8 @@ void DLV11JReset(void* self)
 
 	DLV11J* dlv = (DLV11J*) self;
 
+	dlv->module.irq = 0;
+
 	for(i = 0; i < 4; i++) {
 		dlv->channel[i].rcsr &= ~RCSR_RCVR_INT;
 		dlv->channel[i].xcsr = XCSR_TRANSMIT_READY;
@@ -158,6 +162,7 @@ void DLV11JInit(DLV11J* dlv)
 {
 	int i;
 
+	dlv->module.irq = 0;
 	dlv->module.self = (void*) dlv;
 	dlv->module.read = DLV11JRead;
 	dlv->module.write = DLV11JWrite;
@@ -176,6 +181,7 @@ void DLV11JInit(DLV11J* dlv)
 		dlv->channel[i].buf_size = 0;
 		dlv->channel[i].base = dlv->base + 8 * i;
 		dlv->channel[i].vector = 300 + 8 * i;
+		dlv->channel[i].rcsr = 0;
 	}
 
 	dlv->channel[3].base = 0177560;
@@ -204,7 +210,16 @@ void DLV11JSend(DLV11J* dlv, int channel, unsigned char c)
 		ch->rcsr |= RCSR_RCVR_DONE;
 		if(ch->rcsr & RCSR_RCVR_INT) {
 			QBUS* bus = dlv->module.bus;
-			bus->interrupt(bus, ch->vector);
+			IRQ(ch->vector);
 		}
+	}
+}
+
+void DLV11JStep(DLV11J* dlv)
+{
+	if(dlv->module.irq) {
+		QBUS* bus = dlv->module.bus;
+		if(bus->interrupt(bus, dlv->module.irq))
+			dlv->module.irq = 0;
 	}
 }

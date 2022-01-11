@@ -57,7 +57,7 @@ static void LSI11Write(void* user, u16 address, u16 value)
 static int LSI11QBUSInterrupt(QBUS* bus, int n)
 {
 	if(n != 004) {
-		if(bus->trap) {
+		if(bus->trap || bus->irq) {
 			TRCIRQ(n, TRC_IRQ_FAIL);
 			return 0;
 		} else {

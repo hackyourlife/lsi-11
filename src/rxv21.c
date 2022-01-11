@@ -52,6 +52,8 @@
 #define	WRITE(addr, val)	(bus->write(bus->user, (addr), (val)))
 #define	CHECK()			{ if(bus->trap) return; }
 
+#define	IRQ(x)			if(!bus->interrupt(bus, x)) rx->module.irq = (x)
+
 void RXV21Reset(void* self);
 
 void RXV21ClearErrors(RXV21* rx)
@@ -69,7 +71,7 @@ void RXV21Done(RXV21* rx)
 	rx->rx2es |= RX2ES_DRV_DEN;
 	rx->rx2db = rx->rx2es;
 	if(rx->rx2cs & RX_INTR_ENB) {
-		bus->interrupt(bus, rx->vector);
+		IRQ(rx->vector);
 	}
 }
 
@@ -400,7 +402,7 @@ void RXV21Write(void* self, u16 address, u16 value)
 		}
 		if(!intr && (value & RX_INTR_ENB) && (rx->rx2cs & RX_DONE)) {
 			QBUS* bus = rx->module.bus;
-			bus->interrupt(bus, rx->vector);
+			IRQ(rx->vector);
 		}
 	} else if(address == rx->base + 2) { /* RX2DB */
 		rx->rx2db = value;
@@ -448,4 +450,13 @@ void RXV21Destroy(RXV21* rx)
 void RXV21SetData(RXV21* rx, u8* data)
 {
 	rx->data = data;
+}
+
+void RXV21Step(RXV21* rx)
+{
+	if(rx->module.irq) {
+		QBUS* bus = rx->module.bus;
+		if(bus->interrupt(bus, rx->module.irq))
+			rx->module.irq = 0;
+	}
 }
