@@ -134,7 +134,7 @@ void BDV11Write(void* self, u16 address, u16 value)
 			bdv->display = value;
 			break;
 		case 0177546:
-			bdv->ltc = value & 040;
+			bdv->ltc = value & 0100;
 			break;
 	}
 }
@@ -181,7 +181,7 @@ void BDV11Destroy(BDV11* bdv)
 
 void BDV11Step(BDV11* bdv, float dt)
 {
-	if(bdv->ltc & 040) {
+	if(bdv->ltc & 0100) {
 		bdv->time += dt;
 		if(bdv->time >= LTC_TIME) {
 			QBUS* bus = bdv->module.bus;
