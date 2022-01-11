@@ -4,6 +4,8 @@
 #include "lsi11.h"
 #include "trace.h"
 
+#define USE_FLOAT
+
 /* ODT states */
 #define	ODT_STATE_INIT		0
 #define	ODT_STATE_WAIT		1
@@ -761,8 +763,9 @@ void KD11CPUStep(KD11* kd11, QBUS* bus)
 	u16 tmp, tmp2;
 	u16 src, dst;
 	s32 tmps32;
+#ifdef USE_FLOAT
 	FLOAT f1, f2, f3;
-	u8 unknown = 0;
+#endif
 
 	u16 insn = READ(kd11->r[7]);
 	KD11INSN1* insn1 = (KD11INSN1*) &insn;
@@ -777,310 +780,786 @@ void KD11CPUStep(KD11* kd11, QBUS* bus)
 
 	CHECK();
 
-	/* single operand instructions */
-	switch(insn & 0177700) {
-		case 0005000: /* CLR */
-			CPUWRITEW(insn1->rn, insn1->mode, 0);
-			PSW_CLR(PSW_N | PSW_V | PSW_C);
-			PSW_SET(PSW_Z);
-			break;
-		case 0105000: /* CLRB */
-			CPUWRITEB(insn1->rn, insn1->mode, 0);
-			PSW_CLR(PSW_N | PSW_V | PSW_C);
-			PSW_SET(PSW_Z);
-			break;
-		case 0005100: /* COM */
-			tmp = CPUREADNW(insn1->rn, insn1->mode);
-			tmp = ~tmp;
-			CPUWRITEW(insn1->rn, insn1->mode, tmp);
-			PSW_CLR(PSW_V);
-			PSW_SET(PSW_C);
-			PSW_EQ(PSW_N, tmp & 0x8000);
-			PSW_EQ(PSW_Z, !tmp);
-			break;
-		case 0105100: /* COMB */
-			tmp = CPUREADNB(insn1->rn, insn1->mode);
-			tmp = ~tmp;
-			CPUWRITEB(insn1->rn, insn1->mode, tmp);
-			PSW_CLR(PSW_V);
-			PSW_SET(PSW_C);
-			PSW_EQ(PSW_N, tmp & 0x80);
-			PSW_EQ(PSW_Z, !((u8) tmp));
-			break;
-		case 0005200: /* INC */
-			src = CPUREADNW(insn1->rn, insn1->mode);
-			tmp = src + 1;
-			CPUWRITEW(insn1->rn, insn1->mode, tmp);
-			PSW_EQ(PSW_V, src == 077777)
-			PSW_EQ(PSW_N, tmp & 0x8000);
-			PSW_EQ(PSW_Z, !tmp);
-			break;
-		case 0105200: /* INCB */
-			src = CPUREADNB(insn1->rn, insn1->mode);
-			tmp = (u8) (src + 1);
-			CPUWRITEB(insn1->rn, insn1->mode, tmp);
-			PSW_EQ(PSW_V, src == 000177)
-			PSW_EQ(PSW_N, tmp & 0x80);
-			PSW_EQ(PSW_Z, !tmp);
-			break;
-		case 0005300: /* DEC */
-			src = CPUREADNW(insn1->rn, insn1->mode);
-			tmp = src - 1;
-			CPUWRITEW(insn1->rn, insn1->mode, tmp);
-			PSW_EQ(PSW_V, src == 0100000)
-			PSW_EQ(PSW_N, tmp & 0x8000);
-			PSW_EQ(PSW_Z, !tmp);
-			break;
-		case 0105300: /* DECB */
-			src = CPUREADNB(insn1->rn, insn1->mode);
-			tmp = (u8) (src - 1);
-			CPUWRITEB(insn1->rn, insn1->mode, tmp);
-			PSW_EQ(PSW_V, src == 0000200)
-			PSW_EQ(PSW_N, tmp & 0x80);
-			PSW_EQ(PSW_Z, !tmp);
-			break;
-		case 0005400: /* NEG */
-			tmp = CPUREADNW(insn1->rn, insn1->mode);
-			if(tmp != 0100000) {
-				tmp = -tmp;
+	switch(insn >> 12) {
+		case 000: /* 00 xx xx group */
+			switch(insn >> 6) {
+				case 00000: /* 00 00 xx group */
+					switch(insn) {
+						case 0000000: /* HALT */
+							TRCCPUEvent(TRC_CPU_HALT, kd11->r[7]);
+							kd11->state = STATE_HALT;
+							kd11->odt.state = ODT_STATE_INIT;
+							break;
+						case 0000001: /* WAIT */
+							TRCCPUEvent(TRC_CPU_WAIT, kd11->r[7]);
+							kd11->state = STATE_WAIT;
+							break;
+						case 0000002: /* RTI */
+							kd11->r[7] = READ(kd11->r[6]);
+							kd11->r[6] += 2;
+							CHECK();
+							kd11->psw = READ(kd11->r[6]);
+							kd11->r[6] += 2;
+							CHECK();
+							break;
+						case 0000003: /* BPT */
+							TRCTrap(014, TRC_TRAP);
+							TRAP(014);
+							break;
+						case 0000004: /* IOT */
+							TRCTrap(020, TRC_TRAP);
+							TRAP(020);
+							break;
+						case 0000005: /* RESET */
+							bus->reset(bus);
+							break;
+						case 0000006: /* RTT */
+							kd11->r[7] = READ(kd11->r[6]);
+							kd11->r[6] += 2;
+							CHECK();
+							kd11->psw = READ(kd11->r[6]);
+							kd11->r[6] += 2;
+							CHECK();
+							kd11->state = STATE_INHIBIT_TRACE;
+							break;
+						default: /* 00 00 07 - 00 00 77 */
+							/* unused opcodes */
+							TRCTrap(010, TRC_TRAP_ILL);
+							TRAP(010);
+							break;
+					}
+					break;
+				case 00001: /* JMP */
+					tmp = KD11CPUGetAddr(kd11, bus, insn1->rn, insn1->mode);
+					CHECK();
+					kd11->r[7] = tmp;
+					break;
+				case 00002: /* 00 02 xx group */
+					/* mask=177740: CLN/CLZ/CLV/CLC/CCC/SEN/SEZ/SEV/SEC/SCC */
+					if((insn & 0177770) == 0000200) {
+						/* RTS */
+						kd11->r[7] = kd11->r[insnrts->rn];
+						kd11->r[insnrts->rn] = READ(kd11->r[6]);
+						kd11->r[6] += 2;
+					} else if((insn & 0177740) == 0000240) {
+						tmp = insn & 017;
+						if(insn & 020) {
+							kd11->psw |= tmp;
+						} else {
+							kd11->psw &= ~tmp;
+						}
+					} else {
+						/* 00 02 10 - 00 02 27: unused */
+						TRCTrap(010, TRC_TRAP_ILL);
+						TRAP(010);
+					}
+					break;
+				case 00003: /* SWAB */
+					tmp = CPUREADNW(insn1->rn, insn1->mode);
+					tmp = ((tmp & 0x00FF) << 8) | ((tmp >> 8) & 0xFF);
+					CPUWRITEW(insn1->rn, insn1->mode, tmp);
+					PSW_EQ(PSW_N, tmp & 0x80);
+					PSW_EQ(PSW_Z, !((u8) tmp));
+					PSW_CLR(PSW_V);
+					PSW_CLR(PSW_C);
+					break;
+				case 00004: /* BR */
+				case 00005:
+				case 00006:
+				case 00007:
+					kd11->r[7] += (s16) ((s8) insnbr->offset) * 2;
+					break;
+				case 00010: /* BNE */
+				case 00011:
+				case 00012:
+				case 00013:
+					if(!PSW_GET(PSW_Z)) {
+						kd11->r[7] += (s16) ((s8) insnbr->offset) * 2;
+					}
+					break;
+				case 00014: /* BEQ */
+				case 00015:
+				case 00016:
+				case 00017:
+					if(PSW_GET(PSW_Z)) {
+						kd11->r[7] += (s16) ((s8) insnbr->offset) * 2;
+					}
+					break;
+				case 00020: /* BGE */
+				case 00021:
+				case 00022:
+				case 00023:
+					if((PSW_GET(PSW_N) ^ PSW_GET(PSW_V)) == 0) {
+						kd11->r[7] += (s16) ((s8) insnbr->offset) * 2;
+					}
+					break;
+				case 00024: /* BLT */
+				case 00025:
+				case 00026:
+				case 00027:
+					if(PSW_GET(PSW_N) ^ PSW_GET(PSW_V)) {
+						kd11->r[7] += (s16) ((s8) insnbr->offset) * 2;
+					}
+					break;
+				case 00030: /* BGT */
+				case 00031:
+				case 00032:
+				case 00033:
+					if((PSW_GET(PSW_Z) || (PSW_GET(PSW_N) ^ PSW_GET(PSW_V))) == 0) {
+						kd11->r[7] += (s16) ((s8) insnbr->offset) * 2;
+					}
+					break;
+				case 00034: /* BLE */
+				case 00035:
+				case 00036:
+				case 00037:
+					if(PSW_GET(PSW_Z) || (PSW_GET(PSW_N) ^ PSW_GET(PSW_V))) {
+						kd11->r[7] += (s16) ((s8) insnbr->offset) * 2;
+					}
+					break;
+				case 00040: /* JSR */
+				case 00041:
+				case 00042:
+				case 00043:
+				case 00044:
+				case 00045:
+				case 00046:
+				case 00047:
+					dst = KD11CPUGetAddr(kd11, bus, insnjsr->rn, insnjsr->mode);
+					src = kd11->r[insnjsr->r];
+					CHECK();
+					kd11->r[6] -= 2;
+					WRITE(kd11->r[6], src);
+					kd11->r[insnjsr->r] = kd11->r[7];
+					kd11->r[7] = dst;
+					break;
+				case 00050: /* CLR */
+					CPUWRITEW(insn1->rn, insn1->mode, 0);
+					PSW_CLR(PSW_N | PSW_V | PSW_C);
+					PSW_SET(PSW_Z);
+					break;
+				case 00051: /* COM */
+					tmp = CPUREADNW(insn1->rn, insn1->mode);
+					tmp = ~tmp;
+					CPUWRITEW(insn1->rn, insn1->mode, tmp);
+					PSW_CLR(PSW_V);
+					PSW_SET(PSW_C);
+					PSW_EQ(PSW_N, tmp & 0x8000);
+					PSW_EQ(PSW_Z, !tmp);
+					break;
+				case 00052: /* INC */
+					src = CPUREADNW(insn1->rn, insn1->mode);
+					tmp = src + 1;
+					CPUWRITEW(insn1->rn, insn1->mode, tmp);
+					PSW_EQ(PSW_V, src == 077777)
+					PSW_EQ(PSW_N, tmp & 0x8000);
+					PSW_EQ(PSW_Z, !tmp);
+					break;
+				case 00053: /* DEC */
+					src = CPUREADNW(insn1->rn, insn1->mode);
+					tmp = src - 1;
+					CPUWRITEW(insn1->rn, insn1->mode, tmp);
+					PSW_EQ(PSW_V, src == 0100000)
+					PSW_EQ(PSW_N, tmp & 0x8000);
+					PSW_EQ(PSW_Z, !tmp);
+					break;
+				case 00054: /* NEG */
+					tmp = CPUREADNW(insn1->rn, insn1->mode);
+					if(tmp != 0100000) {
+						tmp = -tmp;
+					}
+					CPUWRITEW(insn1->rn, insn1->mode, tmp);
+					PSW_EQ(PSW_V, tmp == 0100000)
+					PSW_EQ(PSW_N, tmp & 0x8000);
+					PSW_EQ(PSW_Z, !tmp);
+					PSW_EQ(PSW_C, tmp);
+					break;
+				case 00055: /* ADC */
+					src = CPUREADNW(insn1->rn, insn1->mode);
+					tmp2 = PSW_GET(PSW_C) ? 1 : 0;
+					tmp = src + tmp2;
+					CPUWRITEW(insn1->rn, insn1->mode, tmp);
+					PSW_EQ(PSW_V, src == 0077777 && PSW_GET(PSW_C));
+					PSW_EQ(PSW_C, src == 0177777 && PSW_GET(PSW_C));
+					PSW_EQ(PSW_N, tmp & 0x8000);
+					PSW_EQ(PSW_Z, !tmp);
+					break;
+				case 00056: /* SBC */
+					src = CPUREADNW(insn1->rn, insn1->mode);
+					tmp2 = PSW_GET(PSW_C) ? 1 : 0;
+					tmp = src - tmp2;
+					CPUWRITEW(insn1->rn, insn1->mode, tmp);
+					PSW_EQ(PSW_V, src == 0100000);
+					PSW_EQ(PSW_C, !src && PSW_GET(PSW_C));
+					PSW_EQ(PSW_N, tmp & 0x8000);
+					PSW_EQ(PSW_Z, !tmp);
+					break;
+				case 00057: /* TST */
+					tmp = CPUREADW(insn1->rn, insn1->mode);
+					PSW_CLR(PSW_V);
+					PSW_CLR(PSW_C);
+					PSW_EQ(PSW_N, tmp & 0x8000);
+					PSW_EQ(PSW_Z, !tmp);
+					break;
+				case 00060: /* ROR */
+					src = CPUREADNW(insn1->rn, insn1->mode);
+					tmp2 = PSW_GET(PSW_C);
+					tmp = src >> 1;
+					if(tmp2) {
+						tmp |= 0x8000;
+					}
+					CPUWRITEW(insn1->rn, insn1->mode, tmp);
+					PSW_EQ(PSW_C, src & 0x0001);
+					PSW_EQ(PSW_N, tmp & 0x8000);
+					PSW_EQ(PSW_Z, !tmp);
+					PSW_EQ(PSW_V, PSW_GET(PSW_N) ^ PSW_GET(PSW_C));
+					break;
+				case 00061: /* ROL */
+					src = CPUREADNW(insn1->rn, insn1->mode);
+					tmp2 = PSW_GET(PSW_C);
+					tmp = src << 1;
+					if(tmp2) {
+						tmp |= 0x0001;
+					}
+					CPUWRITEW(insn1->rn, insn1->mode, tmp);
+					PSW_EQ(PSW_C, src & 0x8000);
+					PSW_EQ(PSW_N, tmp & 0x8000);
+					PSW_EQ(PSW_Z, !tmp);
+					PSW_EQ(PSW_V, PSW_GET(PSW_N) ^ PSW_GET(PSW_C));
+					break;
+				case 00062: /* ASR */
+					src = CPUREADNW(insn1->rn, insn1->mode);
+					tmp = src;
+					if(tmp & 0x8000) {
+						tmp >>= 1;
+						tmp |= 0x8000;
+					} else {
+						tmp >>= 1;
+					}
+					CPUWRITEW(insn1->rn, insn1->mode, tmp);
+					PSW_EQ(PSW_C, src & 1);
+					PSW_EQ(PSW_N, tmp & 0x8000);
+					PSW_EQ(PSW_Z, !tmp);
+					PSW_EQ(PSW_V, PSW_GET(PSW_N) ^ PSW_GET(PSW_C));
+					break;
+				case 00063: /* ASL */
+					src = CPUREADNW(insn1->rn, insn1->mode);
+					tmp = src << 1;
+					CPUWRITEW(insn1->rn, insn1->mode, tmp);
+					PSW_EQ(PSW_C, src & 0x8000);
+					PSW_EQ(PSW_N, tmp & 0x8000);
+					PSW_EQ(PSW_Z, !tmp);
+					PSW_EQ(PSW_V, PSW_GET(PSW_N) ^ PSW_GET(PSW_C));
+					break;
+				case 00064: /* MARK */
+					kd11->r[6] = kd11->r[7] + 2 * insnmark->nn;
+					kd11->r[7] = kd11->r[5];
+					kd11->r[5] = READ(kd11->r[6]);
+					kd11->r[6] += 2;
+					break;
+				case 00067: /* SXT */
+					if(PSW_GET(PSW_N)) {
+						tmp = 0xFFFF;
+					} else {
+						tmp = 0;
+					}
+					CPUWRITEW(insn1->rn, insn1->mode, tmp);
+					PSW_EQ(PSW_Z, !PSW_GET(PSW_N));
+					PSW_CLR(PSW_V);
+					break;
+				default: /* 006500-006677, 007000-007777: unused */
+					TRCTrap(010, TRC_TRAP_ILL);
+					TRAP(010);
+					break;
 			}
-			CPUWRITEW(insn1->rn, insn1->mode, tmp);
-			PSW_EQ(PSW_V, tmp == 0100000)
-			PSW_EQ(PSW_N, tmp & 0x8000);
-			PSW_EQ(PSW_Z, !tmp);
-			PSW_EQ(PSW_C, tmp);
 			break;
-		case 0105400: /* NEGB */
-			tmp = CPUREADNB(insn1->rn, insn1->mode);
-			if(tmp != 0200) {
-				tmp = -tmp;
-			}
-			CPUWRITEB(insn1->rn, insn1->mode, tmp);
-			PSW_EQ(PSW_V, tmp == 0200)
-			PSW_EQ(PSW_N, tmp & 0x80);
-			PSW_EQ(PSW_Z, !tmp);
-			PSW_EQ(PSW_C, tmp);
-			break;
-		case 0005700: /* TST */
-			tmp = CPUREADW(insn1->rn, insn1->mode);
-			PSW_CLR(PSW_V);
-			PSW_CLR(PSW_C);
-			PSW_EQ(PSW_N, tmp & 0x8000);
-			PSW_EQ(PSW_Z, !tmp);
-			break;
-		case 0105700: /* TSTB */
-			tmp = CPUREADB(insn1->rn, insn1->mode);
-			PSW_CLR(PSW_V);
-			PSW_CLR(PSW_C);
-			PSW_EQ(PSW_N, tmp & 0x80);
-			PSW_EQ(PSW_Z, !tmp);
-			break;
-		case 0006200: /* ASR */
-			src = CPUREADNW(insn1->rn, insn1->mode);
-			tmp = src;
-			if(tmp & 0x8000) {
-				tmp >>= 1;
-				tmp |= 0x8000;
-			} else {
-				tmp >>= 1;
-			}
-			CPUWRITEW(insn1->rn, insn1->mode, tmp);
-			PSW_EQ(PSW_C, src & 1);
-			PSW_EQ(PSW_N, tmp & 0x8000);
-			PSW_EQ(PSW_Z, !tmp);
-			PSW_EQ(PSW_V, PSW_GET(PSW_N) ^ PSW_GET(PSW_C));
-			break;
-		case 0106200: /* ASRB */
-			src = CPUREADNB(insn1->rn, insn1->mode);
-			tmp = src;
-			if(tmp & 0x80) {
-				tmp >>= 1;
-				tmp |= 0x80;
-			} else {
-				tmp >>= 1;
-			}
-			CPUWRITEB(insn1->rn, insn1->mode, tmp);
-			PSW_EQ(PSW_C, src & 1);
-			PSW_EQ(PSW_N, tmp & 0x80);
-			PSW_EQ(PSW_Z, !tmp);
-			PSW_EQ(PSW_V, PSW_GET(PSW_N) ^ PSW_GET(PSW_C));
-			break;
-		case 0006300: /* ASL */
-			src = CPUREADNW(insn1->rn, insn1->mode);
-			tmp = src << 1;
-			CPUWRITEW(insn1->rn, insn1->mode, tmp);
-			PSW_EQ(PSW_C, src & 0x8000);
-			PSW_EQ(PSW_N, tmp & 0x8000);
-			PSW_EQ(PSW_Z, !tmp);
-			PSW_EQ(PSW_V, PSW_GET(PSW_N) ^ PSW_GET(PSW_C));
-			break;
-		case 0106300: /* ASLB */
-			src = CPUREADNB(insn1->rn, insn1->mode);
-			tmp = (u8) (src << 1);
-			CPUWRITEB(insn1->rn, insn1->mode, tmp);
-			PSW_EQ(PSW_C, src & 0x80);
-			PSW_EQ(PSW_N, tmp & 0x80);
-			PSW_EQ(PSW_Z, !tmp);
-			PSW_EQ(PSW_V, PSW_GET(PSW_N) ^ PSW_GET(PSW_C));
-			break;
-		case 0006000: /* ROR */
-			src = CPUREADNW(insn1->rn, insn1->mode);
-			tmp2 = PSW_GET(PSW_C);
-			tmp = src >> 1;
-			if(tmp2) {
-				tmp |= 0x8000;
-			}
-			CPUWRITEW(insn1->rn, insn1->mode, tmp);
-			PSW_EQ(PSW_C, src & 0x0001);
-			PSW_EQ(PSW_N, tmp & 0x8000);
-			PSW_EQ(PSW_Z, !tmp);
-			PSW_EQ(PSW_V, PSW_GET(PSW_N) ^ PSW_GET(PSW_C));
-			break;
-		case 0106000: /* RORB */
-			src = CPUREADNB(insn1->rn, insn1->mode);
-			tmp2 = PSW_GET(PSW_C);
-			tmp = src >> 1;
-			if(tmp2) {
-				tmp |= 0x80;
-			}
-			CPUWRITEB(insn1->rn, insn1->mode, tmp);
-			PSW_EQ(PSW_C, src & 0x01);
-			PSW_EQ(PSW_N, tmp & 0x80);
-			PSW_EQ(PSW_Z, !tmp);
-			PSW_EQ(PSW_V, PSW_GET(PSW_N) ^ PSW_GET(PSW_C));
-			break;
-		case 0006100: /* ROL */
-			src = CPUREADNW(insn1->rn, insn1->mode);
-			tmp2 = PSW_GET(PSW_C);
-			tmp = src << 1;
-			if(tmp2) {
-				tmp |= 0x0001;
-			}
-			CPUWRITEW(insn1->rn, insn1->mode, tmp);
-			PSW_EQ(PSW_C, src & 0x8000);
-			PSW_EQ(PSW_N, tmp & 0x8000);
-			PSW_EQ(PSW_Z, !tmp);
-			PSW_EQ(PSW_V, PSW_GET(PSW_N) ^ PSW_GET(PSW_C));
-			break;
-		case 0106100: /* ROLB */
-			src = CPUREADNB(insn1->rn, insn1->mode);
-			tmp2 = PSW_GET(PSW_C);
-			tmp = (u8) (src << 1);
-			if(tmp2) {
-				tmp |= 0x01;
-			}
-			CPUWRITEB(insn1->rn, insn1->mode, tmp);
-			PSW_EQ(PSW_C, src & 0x80);
-			PSW_EQ(PSW_N, tmp & 0x80);
-			PSW_EQ(PSW_Z, !tmp);
-			PSW_EQ(PSW_V, PSW_GET(PSW_N) ^ PSW_GET(PSW_C));
-			break;
-		case 0000300: /* SWAB */
-			tmp = CPUREADNW(insn1->rn, insn1->mode);
-			tmp = ((tmp & 0x00FF) << 8) | ((tmp >> 8) & 0xFF);
-			CPUWRITEW(insn1->rn, insn1->mode, tmp);
-			PSW_EQ(PSW_N, tmp & 0x80);
-			PSW_EQ(PSW_Z, !((u8) tmp));
-			PSW_CLR(PSW_V);
-			PSW_CLR(PSW_C);
-			break;
-		case 0005500: /* ADC */
-			src = CPUREADNW(insn1->rn, insn1->mode);
-			tmp2 = PSW_GET(PSW_C) ? 1 : 0;
-			tmp = src + tmp2;
-			CPUWRITEW(insn1->rn, insn1->mode, tmp);
-			PSW_EQ(PSW_V, src == 0077777 && PSW_GET(PSW_C));
-			PSW_EQ(PSW_C, src == 0177777 && PSW_GET(PSW_C));
-			PSW_EQ(PSW_N, tmp & 0x8000);
-			PSW_EQ(PSW_Z, !tmp);
-			break;
-		case 0105500: /* ADCB */
-			src = CPUREADNB(insn1->rn, insn1->mode);
-			tmp2 = PSW_GET(PSW_C) ? 1 : 0;
-			tmp = (u8) (src + tmp2);
-			CPUWRITEB(insn1->rn, insn1->mode, tmp);
-			PSW_EQ(PSW_V, src == 0177 && PSW_GET(PSW_C));
-			PSW_EQ(PSW_C, src == 0377 && PSW_GET(PSW_C));
-			PSW_EQ(PSW_N, tmp & 0x80);
-			PSW_EQ(PSW_Z, !tmp);
-			break;
-		case 0005600: /* SBC */
-			src = CPUREADNW(insn1->rn, insn1->mode);
-			tmp2 = PSW_GET(PSW_C) ? 1 : 0;
-			tmp = src - tmp2;
-			CPUWRITEW(insn1->rn, insn1->mode, tmp);
-			PSW_EQ(PSW_V, src == 0100000);
-			PSW_EQ(PSW_C, !src && PSW_GET(PSW_C));
-			PSW_EQ(PSW_N, tmp & 0x8000);
-			PSW_EQ(PSW_Z, !tmp);
-			break;
-		case 0105600: /* SBCB */
-			src = CPUREADNB(insn1->rn, insn1->mode);
-			tmp2 = PSW_GET(PSW_C) ? 1 : 0;
-			tmp = (u8) (src - tmp2);
-			CPUWRITEB(insn1->rn, insn1->mode, tmp);
-			PSW_EQ(PSW_V, src == 0200);
-			PSW_EQ(PSW_C, !src && PSW_GET(PSW_C));
-			PSW_EQ(PSW_N, tmp & 0x80);
-			PSW_EQ(PSW_Z, !tmp);
-			break;
-		case 0006700: /* SXT */
-			if(PSW_GET(PSW_N)) {
-				tmp = 0xFFFF;
-			} else {
-				tmp = 0;
-			}
-			CPUWRITEW(insn1->rn, insn1->mode, tmp);
-			PSW_EQ(PSW_Z, !PSW_GET(PSW_N));
-			PSW_CLR(PSW_V);
-			break;
-		case 0106700: /* MFPS */
-			tmp = (u8) kd11->psw;
-			if(insn1->mode == 0) {
-				kd11->r[insn1->rn] = (s8) kd11->psw;
-			} else {
-				CPUWRITEB(insn1->rn, insn1->mode, tmp);
-			}
-			PSW_EQ(PSW_N, tmp & 0x80);
-			PSW_EQ(PSW_Z, !(tmp & 0xFF));
-			PSW_CLR(PSW_V);
-			break;
-		case 0106400: /* MTPS */
-			tmp = CPUREADB(insn1->rn, insn1->mode);
-			kd11->psw = (kd11->psw & PSW_T) | (tmp & ~PSW_T);
-			break;
-		case 0000100: /* JMP */
-			tmp = KD11CPUGetAddr(kd11, bus, insn1->rn, insn1->mode);
-			CHECK();
-			kd11->r[7] = tmp;
-			break;
-		case 0006400: /* MARK */
-			kd11->r[6] = kd11->r[7] + 2 * insnmark->nn;
-			kd11->r[7] = kd11->r[5];
-			kd11->r[5] = READ(kd11->r[6]);
-			kd11->r[6] += 2;
-			break;
-		default:
-			unknown = 1;
-			break;
-	}
-
-	if(!unknown) {
-		return;
-	}
-
-	unknown = 0;
-
-	/* double operand instructions */
-	switch(insn & 0170000) {
-		case 0010000: /* MOV */
+		case 001: /* MOV */
 			tmp = CPUREADW(insn2->src_rn, insn2->src_mode);
 			CPUWRITEW(insn2->dst_rn, insn2->dst_mode, tmp);
 			PSW_EQ(PSW_N, tmp & 0x8000);
 			PSW_EQ(PSW_Z, !tmp);
 			PSW_CLR(PSW_V);
 			break;
-		case 0110000: /* MOVB */
+		case 002: /* CMP */
+			src = CPUREADW(insn2->src_rn, insn2->src_mode);
+			dst = CPUREADW(insn2->dst_rn, insn2->dst_mode);
+			tmp = src - dst;
+			PSW_EQ(PSW_N, tmp & 0x8000);
+			PSW_EQ(PSW_Z, !tmp);
+			PSW_EQ(PSW_V, ((src & 0x8000) != (dst & 0x8000)) \
+					&& ((dst & 0x8000) == (tmp & 0x8000)));
+			PSW_EQ(PSW_C, ((u32) src - (u32) dst) & 0x10000);
+			break;
+		case 003: /* BIT */
+			src = CPUREADW(insn2->src_rn, insn2->src_mode);
+			dst = CPUREADW(insn2->dst_rn, insn2->dst_mode);
+			tmp = src & dst;
+			PSW_EQ(PSW_N, tmp & 0x8000);
+			PSW_EQ(PSW_Z, !tmp);
+			PSW_CLR(PSW_V);
+			break;
+		case 004: /* BIC */
+			src = CPUREADW(insn2->src_rn, insn2->src_mode);
+			dst = CPUREADNW(insn2->dst_rn, insn2->dst_mode);
+			tmp = ~src & dst;
+			CPUWRITEW(insn2->dst_rn, insn2->dst_mode, tmp);
+			PSW_EQ(PSW_N, tmp & 0x8000);
+			PSW_EQ(PSW_Z, !tmp);
+			PSW_CLR(PSW_V);
+			break;
+		case 005: /* BIS */
+			src = CPUREADW(insn2->src_rn, insn2->src_mode);
+			dst = CPUREADNW(insn2->dst_rn, insn2->dst_mode);
+			tmp = src | dst;
+			CPUWRITEW(insn2->dst_rn, insn2->dst_mode, tmp);
+			PSW_EQ(PSW_N, tmp & 0x8000);
+			PSW_EQ(PSW_Z, !tmp);
+			PSW_CLR(PSW_V);
+			break;
+		case 006: /* ADD */
+			src = CPUREADW(insn2->src_rn, insn2->src_mode);
+			dst = CPUREADNW(insn2->dst_rn, insn2->dst_mode);
+			tmp = src + dst;
+			CPUWRITEW(insn2->dst_rn, insn2->dst_mode, tmp);
+			PSW_EQ(PSW_N, tmp & 0x8000);
+			PSW_EQ(PSW_Z, !tmp);
+			PSW_EQ(PSW_V, ((src & 0x8000) == (dst & 0x8000)) \
+					&& ((dst & 0x8000) != (tmp & 0x8000)));
+			PSW_EQ(PSW_C, ((u32) src + (u32) dst) & 0x10000);
+			break;
+		case 007: /* 07 xx xx group */
+			switch(insn >> 9) {
+				case 0070: /* MUL */
+					dst = kd11->r[insnjsr->r];
+					src = CPUREADW(insnjsr->rn, insnjsr->mode);
+					tmps32 = (s32) (s16) dst * (s16) src;
+					kd11->r[insnjsr->r] = (u16) (tmps32 >> 16);
+					kd11->r[insnjsr->r | 1] = (u16) tmps32;
+					PSW_CLR(PSW_V);
+					PSW_EQ(PSW_N, tmps32 < 0);
+					PSW_EQ(PSW_Z, !tmps32);
+					PSW_EQ(PSW_C, (tmps32 >= 0x7FFF) || (tmps32 < -0x8000));
+					break;
+				case 0071: /* DIV */
+					tmps32 = (kd11->r[insnjsr->r] << 16)
+						| kd11->r[insnjsr->r | 1];
+					src = CPUREADW(insnjsr->rn, insnjsr->mode);
+					if(src == 0) {
+						PSW_SET(PSW_C);
+						PSW_SET(PSW_V);
+					} else {
+						s32 quot = tmps32 / (s16) src;
+						s32 rem = tmps32 % (s16) src;
+						PSW_CLR(PSW_C);
+						if((s16) quot != quot) {
+							PSW_SET(PSW_V);
+						} else {
+							kd11->r[insnjsr->r] = (u16) quot;
+							kd11->r[insnjsr->r | 1] = (u16) rem;
+							PSW_EQ(PSW_Z, !quot);
+							PSW_EQ(PSW_N, quot < 0);
+						}
+					}
+					break;
+				case 0072: /* ASH */
+					dst = kd11->r[insnjsr->r];
+					src = CPUREADW(insnjsr->rn, insnjsr->mode);
+					if(src & 0x20) { /* negative; right */
+						s16 stmp, stmp2;
+						src = (~src & 0x1F) + 1;
+						stmp = (s16) dst;
+						stmp2 = stmp >> (src - 1);
+						stmp >>= src;
+						tmp = (u16) stmp;
+						PSW_EQ(PSW_C, stmp2 & 1);
+						PSW_CLR(PSW_V);
+					} else if((src & 0x1F) == 0) {
+						/* nothing */
+						PSW_CLR(PSW_V);
+						PSW_CLR(PSW_C);
+						tmp = dst;
+					} else { /* positive, left */
+						s16 mask = 0;
+						src &= 0x1F;
+						tmp = dst << src;
+						if(src > 0) {
+							mask = 0x8000;
+							mask >>= src;
+							tmp2 = dst & mask;
+							PSW_EQ(PSW_V, !((tmp2 == 0) || (((tmp2 & mask) | ~mask) == 0xFFFF)));
+						} else {
+							PSW_CLR(PSW_V);
+						}
+						PSW_EQ(PSW_C, (dst << (src - 1)) & 0x8000);
+						if((dst & 0x8000) != (tmp & 0x8000)) {
+							PSW_SET(PSW_V);
+						}
+					}
+					kd11->r[insnjsr->r] = tmp;
+					PSW_EQ(PSW_N, tmp & 0x8000);
+					PSW_EQ(PSW_Z, !tmp);
+					break;
+				case 0073: /* ASHC */
+					dst = kd11->r[insnjsr->r];
+					tmps32 = (kd11->r[insnjsr->r] << 16)
+						| kd11->r[insnjsr->r | 1];
+					src = CPUREADW(insnjsr->rn, insnjsr->mode);
+					if((src & 0x3F) == 0x20) { /* negative; 32 right */
+						PSW_EQ(PSW_C, tmps32 & 0x80000000);
+						PSW_CLR(PSW_V);
+						if(PSW_GET(PSW_C)) {
+							tmps32 = 0xFFFFFFFF;
+						} else {
+							tmps32 = 0;
+						}
+					} else if(src & 0x20) { /* negative; right */
+						s32 stmp2;
+						src = (~src & 0x1F) + 1;
+						stmp2 = tmps32 >> (src - 1);
+						tmps32 >>= src;
+						PSW_EQ(PSW_C, stmp2 & 1);
+					} else if((src & 0x1F) == 0) {
+						/* nothing */
+						PSW_CLR(PSW_V);
+						PSW_CLR(PSW_C);
+					} else { /* positive, left */
+						s32 stmp2;
+						src &= 0x1F;
+						stmp2 = tmps32 << (src - 1);
+						tmps32 <<= src;
+						PSW_EQ(PSW_C, stmp2 & 0x80000000);
+						PSW_EQ(PSW_V, !!(dst & 0x8000)
+								!= !!(tmps32 & 0x80000000));
+					}
+					kd11->r[insnjsr->r] = (u16) (tmps32 >> 16);
+					kd11->r[insnjsr->r | 1] = (u16) tmps32;
+					PSW_EQ(PSW_N, tmps32 & 0x80000000);
+					PSW_EQ(PSW_Z, !tmps32);
+					break;
+				case 0074: /* XOR */
+					src = kd11->r[insnjsr->r];
+					dst = CPUREADNW(insnjsr->rn, insnjsr->mode);
+					tmp = src ^ dst;
+					CPUWRITEW(insnjsr->rn, insnjsr->mode, tmp);
+					PSW_EQ(PSW_N, tmp & 0x8000);
+					PSW_EQ(PSW_Z, !tmp);
+					PSW_CLR(PSW_V);
+					break;
+				case 0075: /* FIS instructions */
+					switch(insn >> 3) {
+#ifdef USE_FLOAT
+						case 007500: /* FADD */
+							f1.u32 = (READ(kd11->r[insnrts->rn] + 4) << 16)
+								| READ(kd11->r[insnrts->rn] + 6);
+							f2.u32 = (READ(kd11->r[insnrts->rn]) << 16)
+								| READ(kd11->r[insnrts->rn] + 2);
+							f3.f32 = f1.f32 + f2.f32;
+							/* TODO: result <= 2**-128 -> result = 0 */
+							/* TODO: implement traps */
+							WRITE(kd11->r[insnrts->rn] + 4,
+									(u16) (f3.u32 >> 16));
+							WRITE(kd11->r[insnrts->rn] + 6, (u16) f3.u32);
+							kd11->r[insnrts->rn] += 4;
+							PSW_EQ(PSW_N, f3.f32 < 0);
+							PSW_EQ(PSW_Z, f3.f32 == 0);
+							PSW_CLR(PSW_V);
+							PSW_CLR(PSW_C);
+							break;
+						case 007501: /* FSUB */
+							f1.u32 = (READ(kd11->r[insnrts->rn] + 4) << 16)
+								| READ(kd11->r[insnrts->rn] + 6);
+							f2.u32 = (READ(kd11->r[insnrts->rn]) << 16)
+								| READ(kd11->r[insnrts->rn] + 2);
+							f3.f32 = f1.f32 - f2.f32;
+							/* TODO: result <= 2**-128 -> result = 0 */
+							/* TODO: implement traps */
+							WRITE(kd11->r[insnrts->rn] + 4,
+									(u16) (f3.u32 >> 16));
+							WRITE(kd11->r[insnrts->rn] + 6, (u16) f3.u32);
+							kd11->r[insnrts->rn] += 4;
+							PSW_EQ(PSW_N, f3.f32 < 0);
+							PSW_EQ(PSW_Z, f3.f32 == 0);
+							PSW_CLR(PSW_V);
+							PSW_CLR(PSW_C);
+							break;
+						case 007502: /* FMUL */
+							f1.u32 = (READ(kd11->r[insnrts->rn] + 4) << 16)
+								| READ(kd11->r[insnrts->rn] + 6);
+							f2.u32 = (READ(kd11->r[insnrts->rn]) << 16)
+								| READ(kd11->r[insnrts->rn] + 2);
+							f3.f32 = f1.f32 * f2.f32;
+							/* TODO: result <= 2**-128 -> result = 0 */
+							/* TODO: implement traps */
+							WRITE(kd11->r[insnrts->rn] + 4,
+									(u16) (f3.u32 >> 16));
+							WRITE(kd11->r[insnrts->rn] + 6, (u16) f3.u32);
+							kd11->r[insnrts->rn] += 4;
+							PSW_EQ(PSW_N, f3.f32 < 0);
+							PSW_EQ(PSW_Z, f3.f32 == 0);
+							PSW_CLR(PSW_V);
+							PSW_CLR(PSW_C);
+							break;
+						case 007503: /* FDIV */
+							f1.u32 = (READ(kd11->r[insnrts->rn] + 4) << 16)
+								| READ(kd11->r[insnrts->rn] + 6);
+							f2.u32 = (READ(kd11->r[insnrts->rn]) << 16)
+								| READ(kd11->r[insnrts->rn] + 2);
+							if(f2.f32 != 0) {
+								f3.f32 = f1.f32 / f2.f32;
+								/* TODO: result <= 2**-128 -> result = 0 */
+								/* TODO: implement traps */
+								WRITE(kd11->r[insnrts->rn] + 4,
+										(u16) (f3.u32 >> 16));
+								WRITE(kd11->r[insnrts->rn] + 6,
+										(u16) f3.u32);
+								PSW_EQ(PSW_N, f3.f32 < 0);
+								PSW_EQ(PSW_Z, f3.f32 == 0);
+								PSW_CLR(PSW_V);
+								PSW_CLR(PSW_C);
+							}
+							kd11->r[insnrts->rn] += 4;
+							break;
+#endif
+						default:
+							/* 075040-076777: unused */
+							TRCTrap(010, TRC_TRAP_ILL);
+							TRAP(010);
+							break;
+					}
+					break;
+				case 0077: /* SOB */
+					kd11->r[insnsob->rn]--;
+					if(kd11->r[insnsob->rn]) {
+						kd11->r[7] -= 2 * insnsob->offset;
+					}
+					break;
+				default:
+					TRCTrap(010, TRC_TRAP_ILL);
+					TRAP(010);
+					break;
+			}
+			break;
+		case 010: /* 10 xx xx group */
+			switch(insn >> 6) {
+				case 01000: /* BPL */
+				case 01001:
+				case 01002:
+				case 01003:
+					if(!PSW_GET(PSW_N)) {
+						kd11->r[7] += (s16) ((s8) insnbr->offset) * 2;
+					}
+					break;
+				case 01004: /* BMI */
+				case 01005:
+				case 01006:
+				case 01007:
+					if(PSW_GET(PSW_N)) {
+						kd11->r[7] += (s16) ((s8) insnbr->offset) * 2;
+					}
+					break;
+				case 01010: /* BHI */
+				case 01011:
+				case 01012:
+				case 01013:
+					if(!PSW_GET(PSW_C) && !PSW_GET(PSW_Z)) {
+						kd11->r[7] += (s16) ((s8) insnbr->offset) * 2;
+					}
+					break;
+				case 01014: /* BLOS */
+				case 01015:
+				case 01016:
+				case 01017:
+					if(PSW_GET(PSW_C) || PSW_GET(PSW_Z)) {
+						kd11->r[7] += (s16) ((s8) insnbr->offset) * 2;
+					}
+					break;
+				case 01020: /* BVC */
+				case 01021:
+				case 01022:
+				case 01023:
+					if(!PSW_GET(PSW_V)) {
+						kd11->r[7] += (s16) ((s8) insnbr->offset) * 2;
+					}
+					break;
+				case 01024: /* BVS */
+				case 01025:
+				case 01026:
+				case 01027:
+					if(PSW_GET(PSW_V)) {
+						kd11->r[7] += (s16) ((s8) insnbr->offset) * 2;
+					}
+					break;
+				case 01030: /* BCC */
+				case 01031:
+				case 01032:
+				case 01033:
+					if(!PSW_GET(PSW_C)) {
+						kd11->r[7] += (s16) ((s8) insnbr->offset) * 2;
+					}
+					break;
+				case 01034: /* BCS */
+				case 01035:
+				case 01036:
+				case 01037:
+					if(PSW_GET(PSW_C)) {
+						kd11->r[7] += (s16) ((s8) insnbr->offset) * 2;
+					}
+					break;
+				case 01040: /* EMT */
+				case 01041:
+				case 01042:
+				case 01043:
+					TRCTrap(030, TRC_TRAP);
+					TRAP(030);
+					break;
+				case 01044: /* TRAP */
+				case 01045:
+				case 01046:
+				case 01047:
+					TRCTrap(034, TRC_TRAP);
+					TRAP(034);
+					break;
+				case 01050: /* CLRB */
+					CPUWRITEB(insn1->rn, insn1->mode, 0);
+					PSW_CLR(PSW_N | PSW_V | PSW_C);
+					PSW_SET(PSW_Z);
+					break;
+				case 01051: /* COMB */
+					tmp = CPUREADNB(insn1->rn, insn1->mode);
+					tmp = ~tmp;
+					CPUWRITEB(insn1->rn, insn1->mode, tmp);
+					PSW_CLR(PSW_V);
+					PSW_SET(PSW_C);
+					PSW_EQ(PSW_N, tmp & 0x80);
+					PSW_EQ(PSW_Z, !((u8) tmp));
+					break;
+				case 01052: /* INCB */
+					src = CPUREADNB(insn1->rn, insn1->mode);
+					tmp = (u8) (src + 1);
+					CPUWRITEB(insn1->rn, insn1->mode, tmp);
+					PSW_EQ(PSW_V, src == 000177)
+					PSW_EQ(PSW_N, tmp & 0x80);
+					PSW_EQ(PSW_Z, !tmp);
+					break;
+				case 01053: /* DECB */
+					src = CPUREADNB(insn1->rn, insn1->mode);
+					tmp = (u8) (src - 1);
+					CPUWRITEB(insn1->rn, insn1->mode, tmp);
+					PSW_EQ(PSW_V, src == 0000200)
+					PSW_EQ(PSW_N, tmp & 0x80);
+					PSW_EQ(PSW_Z, !tmp);
+					break;
+				case 01054: /* NEGB */
+					tmp = CPUREADNB(insn1->rn, insn1->mode);
+					if(tmp != 0200) {
+						tmp = -tmp;
+					}
+					CPUWRITEB(insn1->rn, insn1->mode, tmp);
+					PSW_EQ(PSW_V, tmp == 0200)
+					PSW_EQ(PSW_N, tmp & 0x80);
+					PSW_EQ(PSW_Z, !tmp);
+					PSW_EQ(PSW_C, tmp);
+					break;
+				case 01055: /* ADCB */
+					src = CPUREADNB(insn1->rn, insn1->mode);
+					tmp2 = PSW_GET(PSW_C) ? 1 : 0;
+					tmp = (u8) (src + tmp2);
+					CPUWRITEB(insn1->rn, insn1->mode, tmp);
+					PSW_EQ(PSW_V, src == 0177 && PSW_GET(PSW_C));
+					PSW_EQ(PSW_C, src == 0377 && PSW_GET(PSW_C));
+					PSW_EQ(PSW_N, tmp & 0x80);
+					PSW_EQ(PSW_Z, !tmp);
+					break;
+				case 01056: /* SBCB */
+					src = CPUREADNB(insn1->rn, insn1->mode);
+					tmp2 = PSW_GET(PSW_C) ? 1 : 0;
+					tmp = (u8) (src - tmp2);
+					CPUWRITEB(insn1->rn, insn1->mode, tmp);
+					PSW_EQ(PSW_V, src == 0200);
+					PSW_EQ(PSW_C, !src && PSW_GET(PSW_C));
+					PSW_EQ(PSW_N, tmp & 0x80);
+					PSW_EQ(PSW_Z, !tmp);
+					break;
+				case 01057: /* TSTB */
+					tmp = CPUREADB(insn1->rn, insn1->mode);
+					PSW_CLR(PSW_V);
+					PSW_CLR(PSW_C);
+					PSW_EQ(PSW_N, tmp & 0x80);
+					PSW_EQ(PSW_Z, !tmp);
+					break;
+				case 01060: /* RORB */
+					src = CPUREADNB(insn1->rn, insn1->mode);
+					tmp2 = PSW_GET(PSW_C);
+					tmp = src >> 1;
+					if(tmp2) {
+						tmp |= 0x80;
+					}
+					CPUWRITEB(insn1->rn, insn1->mode, tmp);
+					PSW_EQ(PSW_C, src & 0x01);
+					PSW_EQ(PSW_N, tmp & 0x80);
+					PSW_EQ(PSW_Z, !tmp);
+					PSW_EQ(PSW_V, PSW_GET(PSW_N) ^ PSW_GET(PSW_C));
+					break;
+				case 01061: /* ROLB */
+					src = CPUREADNB(insn1->rn, insn1->mode);
+					tmp2 = PSW_GET(PSW_C);
+					tmp = (u8) (src << 1);
+					if(tmp2) {
+						tmp |= 0x01;
+					}
+					CPUWRITEB(insn1->rn, insn1->mode, tmp);
+					PSW_EQ(PSW_C, src & 0x80);
+					PSW_EQ(PSW_N, tmp & 0x80);
+					PSW_EQ(PSW_Z, !tmp);
+					PSW_EQ(PSW_V, PSW_GET(PSW_N) ^ PSW_GET(PSW_C));
+					break;
+				case 01062: /* ASRB */
+					src = CPUREADNB(insn1->rn, insn1->mode);
+					tmp = src;
+					if(tmp & 0x80) {
+						tmp >>= 1;
+						tmp |= 0x80;
+					} else {
+						tmp >>= 1;
+					}
+					CPUWRITEB(insn1->rn, insn1->mode, tmp);
+					PSW_EQ(PSW_C, src & 1);
+					PSW_EQ(PSW_N, tmp & 0x80);
+					PSW_EQ(PSW_Z, !tmp);
+					PSW_EQ(PSW_V, PSW_GET(PSW_N) ^ PSW_GET(PSW_C));
+					break;
+				case 01063: /* ASLB */
+					src = CPUREADNB(insn1->rn, insn1->mode);
+					tmp = (u8) (src << 1);
+					CPUWRITEB(insn1->rn, insn1->mode, tmp);
+					PSW_EQ(PSW_C, src & 0x80);
+					PSW_EQ(PSW_N, tmp & 0x80);
+					PSW_EQ(PSW_Z, !tmp);
+					PSW_EQ(PSW_V, PSW_GET(PSW_N) ^ PSW_GET(PSW_C));
+					break;
+				case 01064: /* MTPS */
+					tmp = CPUREADB(insn1->rn, insn1->mode);
+					kd11->psw = (kd11->psw & PSW_T) | (tmp & ~PSW_T);
+					break;
+				case 01067: /* MFPS */
+					tmp = (u8) kd11->psw;
+					if(insn1->mode == 0) {
+						kd11->r[insn1->rn] = (s8) kd11->psw;
+					} else {
+						CPUWRITEB(insn1->rn, insn1->mode, tmp);
+					}
+					PSW_EQ(PSW_N, tmp & 0x80);
+					PSW_EQ(PSW_Z, !(tmp & 0xFF));
+					PSW_CLR(PSW_V);
+					break;
+				default:
+					/* unused */
+					TRCTrap(010, TRC_TRAP_ILL);
+					TRAP(010);
+					break;
+			}
+			break;
+		case 011: /* MOVB */
 			tmp = CPUREADB(insn2->src_rn, insn2->src_mode);
 			tmp = (s8) tmp;
 			if(insn2->dst_mode == 0) {
@@ -1092,17 +1571,7 @@ void KD11CPUStep(KD11* kd11, QBUS* bus)
 			PSW_EQ(PSW_Z, !tmp);
 			PSW_CLR(PSW_V);
 			break;
-		case 0020000: /* CMP */
-			src = CPUREADW(insn2->src_rn, insn2->src_mode);
-			dst = CPUREADW(insn2->dst_rn, insn2->dst_mode);
-			tmp = src - dst;
-			PSW_EQ(PSW_N, tmp & 0x8000);
-			PSW_EQ(PSW_Z, !tmp);
-			PSW_EQ(PSW_V, ((src & 0x8000) != (dst & 0x8000)) \
-					&& ((dst & 0x8000) == (tmp & 0x8000)));
-			PSW_EQ(PSW_C, ((u32) src - (u32) dst) & 0x10000);
-			break;
-		case 0120000: /* CMPB */
+		case 012: /* CMPB */
 			src = CPUREADB(insn2->src_rn, insn2->src_mode);
 			dst = CPUREADB(insn2->dst_rn, insn2->dst_mode);
 			tmp = (u8) (src - dst);
@@ -1112,18 +1581,33 @@ void KD11CPUStep(KD11* kd11, QBUS* bus)
 					&& ((dst & 0x80) == (tmp & 0x80)));
 			PSW_EQ(PSW_C, (src - dst) & 0x100);
 			break;
-		case 0060000: /* ADD */
-			src = CPUREADW(insn2->src_rn, insn2->src_mode);
-			dst = CPUREADNW(insn2->dst_rn, insn2->dst_mode);
-			tmp = src + dst;
-			CPUWRITEW(insn2->dst_rn, insn2->dst_mode, tmp);
-			PSW_EQ(PSW_N, tmp & 0x8000);
+		case 013: /* BITB */
+			src = CPUREADB(insn2->src_rn, insn2->src_mode);
+			dst = CPUREADB(insn2->dst_rn, insn2->dst_mode);
+			tmp = src & dst;
+			PSW_EQ(PSW_N, tmp & 0x80);
 			PSW_EQ(PSW_Z, !tmp);
-			PSW_EQ(PSW_V, ((src & 0x8000) == (dst & 0x8000)) \
-					&& ((dst & 0x8000) != (tmp & 0x8000)));
-			PSW_EQ(PSW_C, ((u32) src + (u32) dst) & 0x10000);
+			PSW_CLR(PSW_V);
 			break;
-		case 0160000: /* SUB */
+		case 014: /* BICB */
+			src = CPUREADB(insn2->src_rn, insn2->src_mode);
+			dst = CPUREADNB(insn2->dst_rn, insn2->dst_mode);
+			tmp = (u8) (~src & dst);
+			CPUWRITEB(insn2->dst_rn, insn2->dst_mode, tmp);
+			PSW_EQ(PSW_N, tmp & 0x80);
+			PSW_EQ(PSW_Z, !tmp);
+			PSW_CLR(PSW_V);
+			break;
+		case 015: /* BISB */
+			src = CPUREADB(insn2->src_rn, insn2->src_mode);
+			dst = CPUREADNB(insn2->dst_rn, insn2->dst_mode);
+			tmp = src | dst;
+			CPUWRITEB(insn2->dst_rn, insn2->dst_mode, tmp);
+			PSW_EQ(PSW_N, tmp & 0x80);
+			PSW_EQ(PSW_Z, !tmp);
+			PSW_CLR(PSW_V);
+			break;
+		case 016: /* SUB */
 			src = CPUREADW(insn2->src_rn, insn2->src_mode);
 			dst = CPUREADNW(insn2->dst_rn, insn2->dst_mode);
 			tmp = dst - src;
@@ -1134,450 +1618,10 @@ void KD11CPUStep(KD11* kd11, QBUS* bus)
 					&& ((src & 0x8000) == (tmp & 0x8000)));
 			PSW_EQ(PSW_C, ((u32) dst - (u32) src) & 0x10000);
 			break;
-		case 0030000: /* BIT */
-			src = CPUREADW(insn2->src_rn, insn2->src_mode);
-			dst = CPUREADW(insn2->dst_rn, insn2->dst_mode);
-			tmp = src & dst;
-			PSW_EQ(PSW_N, tmp & 0x8000);
-			PSW_EQ(PSW_Z, !tmp);
-			PSW_CLR(PSW_V);
+		default: /* unused */
+			TRCTrap(010, TRC_TRAP_ILL);
+			TRAP(010);
 			break;
-		case 0130000: /* BITB */
-			src = CPUREADB(insn2->src_rn, insn2->src_mode);
-			dst = CPUREADB(insn2->dst_rn, insn2->dst_mode);
-			tmp = src & dst;
-			PSW_EQ(PSW_N, tmp & 0x80);
-			PSW_EQ(PSW_Z, !tmp);
-			PSW_CLR(PSW_V);
-			break;
-		case 0040000: /* BIC */
-			src = CPUREADW(insn2->src_rn, insn2->src_mode);
-			dst = CPUREADNW(insn2->dst_rn, insn2->dst_mode);
-			tmp = ~src & dst;
-			CPUWRITEW(insn2->dst_rn, insn2->dst_mode, tmp);
-			PSW_EQ(PSW_N, tmp & 0x8000);
-			PSW_EQ(PSW_Z, !tmp);
-			PSW_CLR(PSW_V);
-			break;
-		case 0140000: /* BICB */
-			src = CPUREADB(insn2->src_rn, insn2->src_mode);
-			dst = CPUREADNB(insn2->dst_rn, insn2->dst_mode);
-			tmp = (u8) (~src & dst);
-			CPUWRITEB(insn2->dst_rn, insn2->dst_mode, tmp);
-			PSW_EQ(PSW_N, tmp & 0x80);
-			PSW_EQ(PSW_Z, !tmp);
-			PSW_CLR(PSW_V);
-			break;
-		case 0050000: /* BIS */
-			src = CPUREADW(insn2->src_rn, insn2->src_mode);
-			dst = CPUREADNW(insn2->dst_rn, insn2->dst_mode);
-			tmp = src | dst;
-			CPUWRITEW(insn2->dst_rn, insn2->dst_mode, tmp);
-			PSW_EQ(PSW_N, tmp & 0x8000);
-			PSW_EQ(PSW_Z, !tmp);
-			PSW_CLR(PSW_V);
-			break;
-		case 0150000: /* BISB */
-			src = CPUREADB(insn2->src_rn, insn2->src_mode);
-			dst = CPUREADNB(insn2->dst_rn, insn2->dst_mode);
-			tmp = src | dst;
-			CPUWRITEB(insn2->dst_rn, insn2->dst_mode, tmp);
-			PSW_EQ(PSW_N, tmp & 0x80);
-			PSW_EQ(PSW_Z, !tmp);
-			PSW_CLR(PSW_V);
-			break;
-		default:
-			unknown = 1;
-			break;
-	}
-
-	if(!unknown) {
-		return;
-	}
-
-	unknown = 0;
-
-	/* XOR/JSR */
-	switch(insn & 0177000) {
-		case 0074000: /* XOR */
-			src = kd11->r[insnjsr->r];
-			dst = CPUREADNW(insnjsr->rn, insnjsr->mode);
-			tmp = src ^ dst;
-			CPUWRITEW(insnjsr->rn, insnjsr->mode, tmp);
-			PSW_EQ(PSW_N, tmp & 0x8000);
-			PSW_EQ(PSW_Z, !tmp);
-			PSW_CLR(PSW_V);
-			break;
-		case 0004000: /* JSR */
-			dst = KD11CPUGetAddr(kd11, bus, insnjsr->rn, insnjsr->mode);
-			src = kd11->r[insnjsr->r];
-			CHECK();
-			kd11->r[6] -= 2;
-			WRITE(kd11->r[6], src);
-			kd11->r[insnjsr->r] = kd11->r[7];
-			kd11->r[7] = dst;
-			break;
-		case 0077000: /* SOB */
-			kd11->r[insnsob->rn]--;
-			if(kd11->r[insnsob->rn]) {
-				kd11->r[7] -= 2 * insnsob->offset;
-			}
-			break;
-		case 0070000: /* MUL */
-			dst = kd11->r[insnjsr->r];
-			src = CPUREADW(insnjsr->rn, insnjsr->mode);
-			tmps32 = (s32) (s16) dst * (s16) src;
-			kd11->r[insnjsr->r] = (u16) (tmps32 >> 16);
-			kd11->r[insnjsr->r | 1] = (u16) tmps32;
-			PSW_CLR(PSW_V);
-			PSW_EQ(PSW_N, tmps32 < 0);
-			PSW_EQ(PSW_Z, !tmps32);
-			PSW_EQ(PSW_C, (tmps32 >= 0x7FFF) || (tmps32 < -0x8000));
-			break;
-		case 0071000: /* DIV */
-			tmps32 = (kd11->r[insnjsr->r] << 16)
-				| kd11->r[insnjsr->r | 1];
-			src = CPUREADW(insnjsr->rn, insnjsr->mode);
-			if(src == 0) {
-				PSW_SET(PSW_C);
-				PSW_SET(PSW_V);
-			} else {
-				s32 quot = tmps32 / (s16) src;
-				s32 rem = tmps32 % (s16) src;
-				PSW_CLR(PSW_C);
-				if((s16) quot != quot) {
-					PSW_SET(PSW_V);
-				} else {
-					kd11->r[insnjsr->r] = (u16) quot;
-					kd11->r[insnjsr->r | 1] = (u16) rem;
-					PSW_EQ(PSW_Z, !quot);
-					PSW_EQ(PSW_N, quot < 0);
-				}
-			}
-			break;
-		case 0072000: /* ASH */
-			dst = kd11->r[insnjsr->r];
-			src = CPUREADW(insnjsr->rn, insnjsr->mode);
-			if(src & 0x20) { /* negative; right */
-				src = (~src & 0x1F) + 1;
-				s16 stmp = (s16) dst;
-				s16 stmp2 = stmp >> (src - 1);
-				stmp >>= src;
-				tmp = (u16) stmp;
-				PSW_EQ(PSW_C, stmp2 & 1);
-				PSW_CLR(PSW_V);
-			} else if((src & 0x1F) == 0) {
-				/* nothing */
-				PSW_CLR(PSW_V);
-				PSW_CLR(PSW_C);
-				tmp = dst;
-			} else { /* positive, left */
-				s16 mask = 0;
-				src &= 0x1F;
-				tmp = dst << src;
-				if(src > 0) {
-					mask = 0x8000;
-					mask >>= src;
-					tmp2 = dst & mask;
-					PSW_EQ(PSW_V, !((tmp2 == 0) || (((tmp2 & mask) | ~mask) == 0xFFFF)));
-				} else {
-					PSW_CLR(PSW_V);
-				}
-				PSW_EQ(PSW_C, (dst << (src - 1)) & 0x8000);
-				if((dst & 0x8000) != (tmp & 0x8000)) {
-					PSW_SET(PSW_V);
-				}
-			}
-			kd11->r[insnjsr->r] = tmp;
-			PSW_EQ(PSW_N, tmp & 0x8000);
-			PSW_EQ(PSW_Z, !tmp);
-			break;
-		case 0073000: /* ASHC */
-			dst = kd11->r[insnjsr->r];
-			tmps32 = (kd11->r[insnjsr->r] << 16)
-				| kd11->r[insnjsr->r | 1];
-			src = CPUREADW(insnjsr->rn, insnjsr->mode);
-			if((src & 0x3F) == 0x20) { /* negative; 32 right */
-				PSW_EQ(PSW_C, tmps32 & 0x80000000);
-				PSW_CLR(PSW_V);
-				if(PSW_GET(PSW_C)) {
-					tmps32 = 0xFFFFFFFF;
-				} else {
-					tmps32 = 0;
-				}
-			} else if(src & 0x20) { /* negative; right */
-				s32 stmp2;
-				src = (~src & 0x1F) + 1;
-				stmp2 = tmps32 >> (src - 1);
-				tmps32 >>= src;
-				PSW_EQ(PSW_C, stmp2 & 1);
-			} else if((src & 0x1F) == 0) {
-				/* nothing */
-				PSW_CLR(PSW_V);
-				PSW_CLR(PSW_C);
-			} else { /* positive, left */
-				s32 stmp2;
-				src &= 0x1F;
-				stmp2 = tmps32 << (src - 1);
-				tmps32 <<= src;
-				PSW_EQ(PSW_C, stmp2 & 0x80000000);
-				PSW_EQ(PSW_V, !!(dst & 0x8000)
-						!= !!(tmps32 & 0x80000000));
-			}
-			kd11->r[insnjsr->r] = (u16) (tmps32 >> 16);
-			kd11->r[insnjsr->r | 1] = (u16) tmps32;
-			PSW_EQ(PSW_N, tmps32 & 0x80000000);
-			PSW_EQ(PSW_Z, !tmps32);
-			break;
-		default:
-			unknown = 1;
-			break;
-	}
-
-	if(!unknown) {
-		return;
-	}
-
-	unknown = 0;
-
-	/* RTS */
-	switch(insn & 0177770) {
-		case 0000200: /* RTS */
-			kd11->r[7] = kd11->r[insnrts->rn];
-			kd11->r[insnrts->rn] = READ(kd11->r[6]);
-			kd11->r[6] += 2;
-			break;
-		case 0075000: /* FADD */
-			f1.u32 = (READ(kd11->r[insnrts->rn] + 4) << 16)
-				| READ(kd11->r[insnrts->rn] + 6);
-			f2.u32 = (READ(kd11->r[insnrts->rn]) << 16)
-				| READ(kd11->r[insnrts->rn] + 2);
-			f3.f32 = f1.f32 + f2.f32;
-			/* TODO: result <= 2**-128 -> result = 0 */
-			/* TODO: implement traps */
-			WRITE(kd11->r[insnrts->rn] + 4,
-					(u16) (f3.u32 >> 16));
-			WRITE(kd11->r[insnrts->rn] + 6, (u16) f3.u32);
-			kd11->r[insnrts->rn] += 4;
-			PSW_EQ(PSW_N, f3.f32 < 0);
-			PSW_EQ(PSW_Z, f3.f32 == 0);
-			PSW_CLR(PSW_V);
-			PSW_CLR(PSW_C);
-			break;
-		case 0075010: /* FSUB */
-			f1.u32 = (READ(kd11->r[insnrts->rn] + 4) << 16)
-				| READ(kd11->r[insnrts->rn] + 6);
-			f2.u32 = (READ(kd11->r[insnrts->rn]) << 16)
-				| READ(kd11->r[insnrts->rn] + 2);
-			f3.f32 = f1.f32 - f2.f32;
-			/* TODO: result <= 2**-128 -> result = 0 */
-			/* TODO: implement traps */
-			WRITE(kd11->r[insnrts->rn] + 4,
-					(u16) (f3.u32 >> 16));
-			WRITE(kd11->r[insnrts->rn] + 6, (u16) f3.u32);
-			kd11->r[insnrts->rn] += 4;
-			PSW_EQ(PSW_N, f3.f32 < 0);
-			PSW_EQ(PSW_Z, f3.f32 == 0);
-			PSW_CLR(PSW_V);
-			PSW_CLR(PSW_C);
-			break;
-		case 0075020: /* FMUL */
-			f1.u32 = (READ(kd11->r[insnrts->rn] + 4) << 16)
-				| READ(kd11->r[insnrts->rn] + 6);
-			f2.u32 = (READ(kd11->r[insnrts->rn]) << 16)
-				| READ(kd11->r[insnrts->rn] + 2);
-			f3.f32 = f1.f32 * f2.f32;
-			/* TODO: result <= 2**-128 -> result = 0 */
-			/* TODO: implement traps */
-			WRITE(kd11->r[insnrts->rn] + 4,
-					(u16) (f3.u32 >> 16));
-			WRITE(kd11->r[insnrts->rn] + 6, (u16) f3.u32);
-			kd11->r[insnrts->rn] += 4;
-			PSW_EQ(PSW_N, f3.f32 < 0);
-			PSW_EQ(PSW_Z, f3.f32 == 0);
-			PSW_CLR(PSW_V);
-			PSW_CLR(PSW_C);
-			break;
-		case 0075030: /* FDIV */
-			f1.u32 = (READ(kd11->r[insnrts->rn] + 4) << 16)
-				| READ(kd11->r[insnrts->rn] + 6);
-			f2.u32 = (READ(kd11->r[insnrts->rn]) << 16)
-				| READ(kd11->r[insnrts->rn] + 2);
-			if(f2.f32 != 0) {
-				f3.f32 = f1.f32 / f2.f32;
-				/* TODO: result <= 2**-128 -> result = 0 */
-				/* TODO: implement traps */
-				WRITE(kd11->r[insnrts->rn] + 4,
-						(u16) (f3.u32 >> 16));
-				WRITE(kd11->r[insnrts->rn] + 6,
-						(u16) f3.u32);
-				kd11->r[insnrts->rn] += 4;
-				PSW_EQ(PSW_N, f3.f32 < 0);
-				PSW_EQ(PSW_Z, f3.f32 == 0);
-				PSW_CLR(PSW_V);
-				PSW_CLR(PSW_C);
-			}
-			break;
-		default:
-			unknown = 1;
-			break;
-	}
-
-	if(!unknown) {
-		return;
-	}
-
-	unknown = 0;
-
-	/* branches */
-	switch(insn & 0177400) {
-		case 0000400: /* BR */
-			kd11->r[7] += (s16) ((s8) insnbr->offset) * 2;
-			break;
-		case 0001000: /* BNE */
-			if(!PSW_GET(PSW_Z)) {
-				kd11->r[7] += (s16) ((s8) insnbr->offset) * 2;
-			}
-			break;
-		case 0001400: /* BEQ */
-			if(PSW_GET(PSW_Z)) {
-				kd11->r[7] += (s16) ((s8) insnbr->offset) * 2;
-			}
-			break;
-		case 0100000: /* BPL */
-			if(!PSW_GET(PSW_N)) {
-				kd11->r[7] += (s16) ((s8) insnbr->offset) * 2;
-			}
-			break;
-		case 0100400: /* BMI */
-			if(PSW_GET(PSW_N)) {
-				kd11->r[7] += (s16) ((s8) insnbr->offset) * 2;
-			}
-			break;
-		case 0102000: /* BVC */
-			if(!PSW_GET(PSW_V)) {
-				kd11->r[7] += (s16) ((s8) insnbr->offset) * 2;
-			}
-			break;
-		case 0102400: /* BVS */
-			if(PSW_GET(PSW_V)) {
-				kd11->r[7] += (s16) ((s8) insnbr->offset) * 2;
-			}
-			break;
-		case 0103000: /* BCC */
-			if(!PSW_GET(PSW_C)) {
-				kd11->r[7] += (s16) ((s8) insnbr->offset) * 2;
-			}
-			break;
-		case 0103400: /* BCS */
-			if(PSW_GET(PSW_C)) {
-				kd11->r[7] += (s16) ((s8) insnbr->offset) * 2;
-			}
-			break;
-		case 0002000: /* BGE */
-			if((PSW_GET(PSW_N) ^ PSW_GET(PSW_V)) == 0) {
-				kd11->r[7] += (s16) ((s8) insnbr->offset) * 2;
-			}
-			break;
-		case 0002400: /* BLT */
-			if(PSW_GET(PSW_N) ^ PSW_GET(PSW_V)) {
-				kd11->r[7] += (s16) ((s8) insnbr->offset) * 2;
-			}
-			break;
-		case 0003000: /* BGT */
-			if((PSW_GET(PSW_Z) || (PSW_GET(PSW_N) ^ PSW_GET(PSW_V))) == 0) {
-				kd11->r[7] += (s16) ((s8) insnbr->offset) * 2;
-			}
-			break;
-		case 0003400: /* BLE */
-			if(PSW_GET(PSW_Z) || (PSW_GET(PSW_N) ^ PSW_GET(PSW_V))) {
-				kd11->r[7] += (s16) ((s8) insnbr->offset) * 2;
-			}
-			break;
-		case 0101000: /* BHI */
-			if(!PSW_GET(PSW_C) && !PSW_GET(PSW_Z)) {
-				kd11->r[7] += (s16) ((s8) insnbr->offset) * 2;
-			}
-			break;
-		case 0101400: /* BLOS */
-			if(PSW_GET(PSW_C) || PSW_GET(PSW_Z)) {
-				kd11->r[7] += (s16) ((s8) insnbr->offset) * 2;
-			}
-			break;
-		case 0104000: /* EMT */
-			TRCTrap(030, TRC_TRAP);
-			TRAP(030);
-			break;
-		case 0104400: /* TRAP */
-			TRCTrap(034, TRC_TRAP);
-			TRAP(034);
-			break;
-		default:
-			unknown = 1;
-			break;
-	}
-
-	if(!unknown) {
-		return;
-	}
-
-	unknown = 0;
-
-	/* misc instructions without operands */
-	switch(insn) {
-		case 0000003: /* BPT */
-			TRCTrap(014, TRC_TRAP);
-			TRAP(014);
-			break;
-		case 0000004: /* IOT */
-			TRCTrap(020, TRC_TRAP);
-			TRAP(020);
-			break;
-		case 0000002: /* RTI */
-			kd11->r[7] = READ(kd11->r[6]);
-			kd11->r[6] += 2;
-			CHECK();
-			kd11->psw = READ(kd11->r[6]);
-			kd11->r[6] += 2;
-			CHECK();
-			break;
-		case 0000006: /* RTT */
-			kd11->r[7] = READ(kd11->r[6]);
-			kd11->r[6] += 2;
-			CHECK();
-			kd11->psw = READ(kd11->r[6]);
-			kd11->r[6] += 2;
-			CHECK();
-			kd11->state = STATE_INHIBIT_TRACE;
-			break;
-		case 0000000: /* HALT */
-			TRCCPUEvent(TRC_CPU_HALT, kd11->r[7]);
-			kd11->state = STATE_HALT;
-			kd11->odt.state = ODT_STATE_INIT;
-			break;
-		case 0000001: /* WAIT */
-			TRCCPUEvent(TRC_CPU_WAIT, kd11->r[7]);
-			kd11->state = STATE_WAIT;
-			break;
-		case 0000005: /* RESET */
-			bus->reset(bus);
-			break;
-		default:
-			unknown = 1;
-			break;
-	}
-
-	/* CLN/CLZ/CLV/CLC/CCC/SEN/SEZ/SEV/SEC/SCC */
-	if(unknown && ((insn & 0177740) == 0000240)) {
-		tmp = insn & 017;
-		if(insn & 020) {
-			kd11->psw |= tmp;
-		} else {
-			kd11->psw &= ~tmp;
-		}
-	} else if(unknown) {
-		TRCTrap(010, TRC_TRAP_ILL);
-		TRAP(010);
 	}
 }
 
