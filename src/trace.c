@@ -42,7 +42,7 @@ void TRACEStep(TRACE* trace, u16* r, u16 psw, u16* insn)
 #define	PSW_T		0x10
 #define	PSW_PRIO	0x80
 		LSI11Disassemble(insn, r[7], buf);
-		fprintf(DST, "PC=%06o PSW [%c%c%c%c%c%c] SP=%06o [%06o %06o] %06o => %s\n",
+		fprintf(DST, "PC=%06o PSW [%c%c%c%c%c%c] SP=%06o [R0=%06o R1=%06o R2=%06o R3=%06o R4=%06o R5=%06o] %06o => %s\n",
 			r[7],
 			PSW_GET(PSW_PRIO) ? 'P' : '-',
 			PSW_GET(PSW_T) ? 'T' : '-',
@@ -50,7 +50,7 @@ void TRACEStep(TRACE* trace, u16* r, u16 psw, u16* insn)
 			PSW_GET(PSW_Z) ? 'Z' : '-',
 			PSW_GET(PSW_V) ? 'V' : '-',
 			PSW_GET(PSW_C) ? 'C' : '-',
-			r[6], r[0], r[1],
+			r[6], r[0], r[1], r[2], r[3], r[4], r[5],
 			*insn, buf);
 #undef	PSW_GET
 #undef	PSW_C
@@ -456,7 +456,7 @@ static const char* rxv21_get_error_name(int type)
 		case TRC_RXV21_SECT_NO:
 			return "Desired sector could not be found after looking at 52 headers (2 revolutions)";
 		default:
-			return "unknwn";
+			return "unknown";
 	}
 }
 
