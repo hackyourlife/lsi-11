@@ -753,10 +753,240 @@ u16 KD11CPUGetAddr(KD11* kd11, QBUS* bus, u16 dst, u16 mode)
 #define CPUWRITEB(rn, mode, v)	KD11CPUWriteB(kd11, bus, rn, mode, v); \
 				CHECK()
 
-typedef union {
-	float	f32;
-	u32	u32;
-} FLOAT;
+#ifdef USE_FLOAT
+#define	FP_V_EXP		23
+#define	FP_V_HB			23
+#define	FP_M_EXP		0377
+#define	FP_SIGN			(1 << 31)
+#define	FP_EXP			(FP_M_EXP << FP_V_EXP)
+#define	FP_HB			(1 << FP_V_HB)
+#define	FP_FRAC			((1 << FP_V_HB) - 1)
+#define	FP_BIAS			0200
+#define	FP_GUARD		3
+
+#define	FP_ROUND_GUARD		(1 << (FP_GUARD - 1))
+
+#define	F_LT(x, y)		((x) < (y))
+#define	F_LT_ABS(x, y)		(((x) & ~FP_SIGN) < ((y) & ~FP_SIGN))
+#define	F_SIGN(x)		((x) & FP_SIGN)
+#define	F_ADD(s1, s2, d)	d = ((s1) + (s2))
+#define	F_SUB(s1, s2, d)	d = ((s2) - (s1))
+#define	F_LSH_1(x)		x = ((x) << 1);
+#define	F_RSH_1(x)		x = ((x) >> 1) & 0x7FFFFFFF
+#define F_LSH_V(s, n, d)	d = ((n) >= 32) ? 0 : (s << (n));
+#define F_RSH_V(s, n, d)	d = ((n) >= 32) ? 0 : ((s >> (n)) & fp_and_mask[32 - (n)]) & 0xFFFFFFFF
+#define	F_LSH_K(s, n, d)	d = (s) << (n)
+#define	F_RSH_K(s, n, d)	d = (((s) >> (n)) & fp_and_mask[32 - (n)]) & 0xFFFFFFFF
+#define	F_LSH_GUARD(x)		F_LSH_K(x, FP_GUARD, x)
+#define	F_RSH_GUARD(x)		F_RSH_K(x, FP_GUARD, x)
+#define	F_EXP(x)		(((x) >> FP_V_EXP) & FP_M_EXP)
+#define	F_FRAC(x)		(((x) & FP_FRAC) | FP_HB)
+
+static const u32 fp_and_mask[33] = {
+	0,
+	0x1, 0x3, 0x7, 0xF,
+	0x1F, 0x3F, 0x7F, 0xFF,
+	0x1FF, 0x3FF, 0x7FF, 0xFFF,
+	0x1FFF, 0x3FFF, 0x7FFF, 0xFFFF,
+	0x1FFFF, 0x3FFFF, 0x7FFFF, 0xFFFFF,
+	0x1FFFFF, 0x3FFFFF, 0x7FFFFF, 0xFFFFFF,
+	0x1FFFFFF, 0x3FFFFFF, 0x7FFFFFF, 0xFFFFFFF,
+	0x1FFFFFFF, 0x3FFFFFFF, 0x7FFFFFFF, 0xFFFFFFFF
+};
+
+static s32 KD11FPURoundPack(KD11* kd11, s32 sign, s32 exp, s32 frac, unsigned int* trap)
+{
+	/* round */
+	frac = frac + FP_ROUND_GUARD;
+	if(frac & _BV(FP_V_HB + FP_GUARD + 1)) {
+		F_RSH_1(frac);
+		exp++;
+	}
+
+	/* pack */
+	F_RSH_GUARD(frac);
+
+	if(exp > 0377) {
+		/* overflow */
+		TRCTrap(0244, TRC_TRAP);
+		TRAP(0244);
+		PSW_SET(PSW_V);
+		PSW_CLR(PSW_N);
+		PSW_CLR(PSW_C);
+		PSW_CLR(PSW_Z);
+		*trap = 1;
+		return 0;
+	} else if(exp <= 0) {
+		/* underflow */
+		TRCTrap(0244, TRC_TRAP);
+		TRAP(0244);
+		PSW_SET(PSW_V);
+		PSW_SET(PSW_N);
+		PSW_CLR(PSW_C);
+		PSW_CLR(PSW_Z);
+		*trap = 1;
+		return 0;
+	} else {
+		*trap = 0;
+		return (sign & FP_SIGN) | ((exp & FP_M_EXP) << FP_V_EXP)
+			| (frac & FP_FRAC);
+	}
+}
+
+static s32 KD11FPUADD(KD11* kd11, s32 ac, s32 src, unsigned int* trap)
+{
+	*trap = 0;
+
+	if(F_LT_ABS(ac, src)) {
+		/* swap operands */
+		s32 tmp = ac;
+		ac = src;
+		src = tmp;
+	}
+
+	s32 acexp = F_EXP(ac);
+	s32 srcexp = F_EXP(src);
+
+	if(acexp == 0) {
+		return src;
+	} else if(srcexp == 0) {
+		return ac;
+	}
+
+	s32 ediff = acexp - srcexp;
+
+	if(ediff >= 60) {
+		return ac;
+	}
+
+	s32 acfrac = F_FRAC(ac);
+	s32 srcfrac = F_FRAC(src);
+
+	F_LSH_GUARD(acfrac);
+	F_LSH_GUARD(srcfrac);
+
+	if(F_SIGN(ac) != F_SIGN(src)) {
+		if(ediff) {
+			F_RSH_V(srcfrac, ediff, srcfrac);
+		}
+		F_SUB(srcfrac, acfrac, acfrac);
+		if(!acfrac) {
+			return 0;
+		}
+		if(ediff <= 1) {
+			if((acfrac & (0x00FFFFFF << FP_GUARD)) == 0) {
+				F_LSH_K(acfrac, 24, acfrac);
+				acexp -= 24;
+			}
+			if((acfrac & (0x00FFF000 << FP_GUARD)) == 0) {
+				F_LSH_K(acfrac, 12, acfrac);
+				acexp -= 12;
+			}
+			if((acfrac & (0x00FC0000 << FP_GUARD)) == 0) {
+				F_LSH_K(acfrac, 6, acfrac);
+				acexp -= 6;
+			}
+		}
+		while((acfrac & _BV(FP_V_HB + FP_GUARD)) == 0) {
+			F_LSH_1(acfrac);
+			acexp--;
+		}
+	} else {
+		if(ediff) {
+			F_RSH_V(srcfrac, ediff, srcfrac);
+		}
+		F_ADD(srcfrac, acfrac, acfrac);
+		if(acfrac & _BV(FP_V_HB + FP_GUARD + 1)) {
+			F_RSH_1(acfrac);
+			acexp++;
+		}
+	}
+
+	return KD11FPURoundPack(kd11, ac, acexp, acfrac, trap);
+}
+
+static s32 KD11FPUMUL(KD11* kd11, s32 ac, s32 src, unsigned int* trap)
+{
+	*trap = 0;
+
+	s32 acexp = F_EXP(ac);
+	s32 srcexp = F_EXP(src);
+
+	if(!acexp || !srcexp) {
+		return 0;
+	}
+
+	s32 acfrac = F_FRAC(ac);
+	s32 srcfrac = F_FRAC(src);
+
+	acexp += srcexp - FP_BIAS;
+	ac ^= src;
+
+	/* frac_mulfp11 */
+	acfrac = ((u64) acfrac * (u64) srcfrac) >> 21;
+
+	if((acfrac & _BV(FP_V_HB + FP_GUARD)) == 0) {
+		F_LSH_1(acfrac);
+		acexp--;
+	}
+
+	return KD11FPURoundPack(kd11, ac, acexp, acfrac, trap);
+}
+
+static s32 KD11FPUDIV(KD11* kd11, s32 ac, s32 src, unsigned int* trap)
+{
+	*trap = 0;
+
+	s32 acexp = F_EXP(ac);
+	s32 srcexp = F_EXP(src);
+
+	if(srcexp == 0) {
+		TRCTrap(0244, TRC_TRAP);
+		TRAP(0244);
+		PSW_SET(PSW_V);
+		PSW_SET(PSW_N);
+		PSW_SET(PSW_C);
+		PSW_CLR(PSW_Z);
+		*trap = 1;
+		return 0;
+	}
+
+	if(acexp == 0) {
+		return 0;
+	}
+
+	s32 acfrac = F_FRAC(ac);
+	s32 srcfrac = F_FRAC(src);
+	F_LSH_GUARD(acfrac);
+	F_LSH_GUARD(srcfrac);
+
+	acexp = acexp - srcexp + FP_BIAS + 1;
+	ac ^= src;
+
+	int count = FP_V_HB + FP_GUARD + 1;
+
+	s32 quo = 0;
+	int i;
+	for(i = count; (i > 0) && acfrac; i--) {
+		F_LSH_1(quo);
+		if(!F_LT(acfrac, srcfrac)) {
+			F_SUB(srcfrac, acfrac, acfrac);
+			quo |= 1;
+		}
+		F_LSH_1(acfrac);
+	}
+	if(i > 0) {
+		F_LSH_V(quo, i, quo);
+	}
+
+	if((quo & _BV(FP_V_HB + FP_GUARD)) == 0) {
+		F_LSH_1(quo);
+		acexp--;
+	}
+
+	return KD11FPURoundPack(kd11, ac, acexp, quo, trap);
+}
+#endif
 
 void KD11CPUStep(KD11* kd11, QBUS* bus)
 {
@@ -764,7 +994,8 @@ void KD11CPUStep(KD11* kd11, QBUS* bus)
 	u16 src, dst;
 	s32 tmps32;
 #ifdef USE_FLOAT
-	FLOAT f1, f2, f3;
+	s32 f1, f2, f3;
+	unsigned int trap;
 #endif
 
 	u16 insn = READ(kd11->r[7]);
@@ -1249,75 +1480,108 @@ void KD11CPUStep(KD11* kd11, QBUS* bus)
 					switch(insn >> 3) {
 #ifdef USE_FLOAT
 						case 007500: /* FADD */
-							f1.u32 = (READ(kd11->r[insnrts->rn] + 4) << 16)
+							f1 = (READ(kd11->r[insnrts->rn] + 4) << 16)
 								| READ(kd11->r[insnrts->rn] + 6);
-							f2.u32 = (READ(kd11->r[insnrts->rn]) << 16)
+							f2 = (READ(kd11->r[insnrts->rn]) << 16)
 								| READ(kd11->r[insnrts->rn] + 2);
-							f3.f32 = f1.f32 + f2.f32;
-							/* TODO: result <= 2**-128 -> result = 0 */
-							/* TODO: implement traps */
-							WRITE(kd11->r[insnrts->rn] + 4,
-									(u16) (f3.u32 >> 16));
-							WRITE(kd11->r[insnrts->rn] + 6, (u16) f3.u32);
-							kd11->r[insnrts->rn] += 4;
-							PSW_EQ(PSW_N, f3.f32 < 0);
-							PSW_EQ(PSW_Z, f3.f32 == 0);
-							PSW_CLR(PSW_V);
-							PSW_CLR(PSW_C);
-							break;
-						case 007501: /* FSUB */
-							f1.u32 = (READ(kd11->r[insnrts->rn] + 4) << 16)
-								| READ(kd11->r[insnrts->rn] + 6);
-							f2.u32 = (READ(kd11->r[insnrts->rn]) << 16)
-								| READ(kd11->r[insnrts->rn] + 2);
-							f3.f32 = f1.f32 - f2.f32;
-							/* TODO: result <= 2**-128 -> result = 0 */
-							/* TODO: implement traps */
-							WRITE(kd11->r[insnrts->rn] + 4,
-									(u16) (f3.u32 >> 16));
-							WRITE(kd11->r[insnrts->rn] + 6, (u16) f3.u32);
-							kd11->r[insnrts->rn] += 4;
-							PSW_EQ(PSW_N, f3.f32 < 0);
-							PSW_EQ(PSW_Z, f3.f32 == 0);
-							PSW_CLR(PSW_V);
-							PSW_CLR(PSW_C);
-							break;
-						case 007502: /* FMUL */
-							f1.u32 = (READ(kd11->r[insnrts->rn] + 4) << 16)
-								| READ(kd11->r[insnrts->rn] + 6);
-							f2.u32 = (READ(kd11->r[insnrts->rn]) << 16)
-								| READ(kd11->r[insnrts->rn] + 2);
-							f3.f32 = f1.f32 * f2.f32;
-							/* TODO: result <= 2**-128 -> result = 0 */
-							/* TODO: implement traps */
-							WRITE(kd11->r[insnrts->rn] + 4,
-									(u16) (f3.u32 >> 16));
-							WRITE(kd11->r[insnrts->rn] + 6, (u16) f3.u32);
-							kd11->r[insnrts->rn] += 4;
-							PSW_EQ(PSW_N, f3.f32 < 0);
-							PSW_EQ(PSW_Z, f3.f32 == 0);
-							PSW_CLR(PSW_V);
-							PSW_CLR(PSW_C);
-							break;
-						case 007503: /* FDIV */
-							f1.u32 = (READ(kd11->r[insnrts->rn] + 4) << 16)
-								| READ(kd11->r[insnrts->rn] + 6);
-							f2.u32 = (READ(kd11->r[insnrts->rn]) << 16)
-								| READ(kd11->r[insnrts->rn] + 2);
-							if(f2.f32 != 0) {
-								f3.f32 = f1.f32 / f2.f32;
-								/* TODO: result <= 2**-128 -> result = 0 */
-								/* TODO: implement traps */
-								WRITE(kd11->r[insnrts->rn] + 4,
-										(u16) (f3.u32 >> 16));
-								WRITE(kd11->r[insnrts->rn] + 6,
-										(u16) f3.u32);
-								PSW_EQ(PSW_N, f3.f32 < 0);
-								PSW_EQ(PSW_Z, f3.f32 == 0);
+							if(bus->trap == 004) {
+								trap = 1;
+							} else {
+								f3 = KD11FPUADD(kd11, f1, f2, &trap);
+							}
+							if(!trap) {
+								WRITE(kd11->r[insnrts->rn] + 4, (u16) ((u32) f3 >> 16));
+								WRITE(kd11->r[insnrts->rn] + 6, (u16) f3);
+								kd11->r[insnrts->rn] += 4;
+								PSW_EQ(PSW_N, F_SIGN(f3));
+								PSW_EQ(PSW_Z, f3 == 0);
 								PSW_CLR(PSW_V);
 								PSW_CLR(PSW_C);
 							}
-							kd11->r[insnrts->rn] += 4;
+							if(bus->trap != 004) {
+								PSW_CLR(0140);
+							}
+							break;
+						case 007501: /* FSUB */
+							f1 = (READ(kd11->r[insnrts->rn] + 4) << 16)
+								| READ(kd11->r[insnrts->rn] + 6);
+							f2 = (READ(kd11->r[insnrts->rn]) << 16)
+								| READ(kd11->r[insnrts->rn] + 2);
+							if(f2) {
+								f2 ^= FP_SIGN;
+							}
+							if(bus->trap == 004) {
+								trap = 1;
+							} else {
+								f3 = KD11FPUADD(kd11, f1, f2, &trap);
+							}
+							if(!trap) {
+								WRITE(kd11->r[insnrts->rn] + 4, (u16) ((u32) f3 >> 16));
+								WRITE(kd11->r[insnrts->rn] + 6, (u16) f3);
+								kd11->r[insnrts->rn] += 4;
+								PSW_EQ(PSW_N, F_SIGN(f3));
+								PSW_EQ(PSW_Z, f3 == 0);
+								PSW_CLR(PSW_V);
+								PSW_CLR(PSW_C);
+							}
+							if(bus->trap != 004) {
+								PSW_CLR(0140);
+							}
+							break;
+						case 007502: /* FMUL */
+							f1 = (READ(kd11->r[insnrts->rn] + 4) << 16)
+								| READ(kd11->r[insnrts->rn] + 6);
+							f2 = (READ(kd11->r[insnrts->rn]) << 16)
+								| READ(kd11->r[insnrts->rn] + 2);
+							if(bus->trap == 004) {
+								trap = 1;
+							} else {
+								f3 = KD11FPUMUL(kd11, f1, f2, &trap);
+							}
+							if(!trap) {
+								WRITE(kd11->r[insnrts->rn] + 4, (u16) ((u32) f3 >> 16));
+								WRITE(kd11->r[insnrts->rn] + 6, (u16) f3);
+								kd11->r[insnrts->rn] += 4;
+								PSW_EQ(PSW_N, F_SIGN(f3));
+								PSW_EQ(PSW_Z, f3 == 0);
+								PSW_CLR(PSW_V);
+								PSW_CLR(PSW_C);
+							}
+							if(bus->trap != 004) {
+								PSW_CLR(0140);
+							}
+							break;
+						case 007503: /* FDIV */
+							f1 = (READ(kd11->r[insnrts->rn] + 4) << 16)
+								| READ(kd11->r[insnrts->rn] + 6);
+							f2 = (READ(kd11->r[insnrts->rn]) << 16)
+								| READ(kd11->r[insnrts->rn] + 2);
+							if(f2 != 0) {
+								if(bus->trap == 004) {
+									trap = 1;
+								} else {
+									f3 = KD11FPUDIV(kd11, f1, f2, &trap);
+								}
+								if(!trap) {
+									WRITE(kd11->r[insnrts->rn] + 4, (u16) ((u32) f3 >> 16));
+									WRITE(kd11->r[insnrts->rn] + 6, (u16) (u32) f3);
+									kd11->r[insnrts->rn] += 4;
+									PSW_EQ(PSW_N, F_SIGN(f3));
+									PSW_EQ(PSW_Z, f3 == 0);
+									PSW_CLR(PSW_V);
+									PSW_CLR(PSW_C);
+								}
+							} else {
+								PSW_SET(PSW_V);
+								PSW_SET(PSW_N);
+								PSW_SET(PSW_C);
+								PSW_CLR(PSW_Z);
+								TRCTrap(0244, TRC_TRAP);
+								TRAP(0244);
+							}
+							if(bus->trap != 004) {
+								PSW_CLR(0140);
+							}
 							break;
 #endif
 						default:
