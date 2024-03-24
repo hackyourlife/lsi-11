@@ -3,10 +3,11 @@ LSI-11
 
 This is an emulator of an LSI-11 system (PDP-11/03-L).
 
-The emulated system has 5 modules installed:
+The emulated system has 6 modules installed:
 - KD11-NA (M7270) CPU
 - MSV11 (M8044) 32KW RAM
 - RXV21 (M8029) RX02 floppy disk controller
+- RLV12 (M8061) RL01/RL02 hard disk controller
 - DLV11-J (M8043) 4x Serial line interface
 - BDV11 bus terminator, bootstrap, and diagnostic ROM
 
