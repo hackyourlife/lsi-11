@@ -4,24 +4,6 @@
 #include "lsi11.h"
 #include "trace.h"
 
-#define	_A(x)		(1 << ((x) - 1))
-#define	_B(x)		(1 << ((x) + 7))
-
-#define	BDV11_CPU_TEST	_A(1)
-#define	BDV11_MEM_TEST	_A(2)	
-#define	BDV11_DECNET	_A(3)
-#define	BDV11_DIALOG	_A(4)
-#define	BDV11_LOOP	_B(1)
-#define	BDV11_RK05	_A(8)
-#define	BDV11_RL01	_A(7)
-#define	BDV11_RX01	_A(6)
-#define	BDV11_RX02	(_A(6) | _A(7))
-#define	BDV11_ROM	_A(5)
-
-#define	BDV11_EXT_DIAG	_B(2)
-#define	BDV11_2780	_B(3)
-#define	BDV11_PROG_ROM	_B(4)
-
 #define	BDV11_SWITCH	(BDV11_CPU_TEST | BDV11_MEM_TEST \
 		| BDV11_DIALOG | BDV11_RX02)
 
@@ -93,7 +75,7 @@ u16 BDV11Read(void* self, u16 address)
 		case 0177522:
 			return bdv->scratch;
 		case 0177524:
-			return BDV11_SWITCH;
+			return bdv->sw;
 		case 0177546:
 			return bdv->ltc;
 		default:
@@ -105,6 +87,15 @@ u16 BDV11Read(void* self, u16 address)
 						(address - 0173400) / 2);
 			}
 			return 0;
+	}
+}
+
+u8 BDV11Read8(void* self, u16 address)
+{
+	if(address & 1) {
+		return (u8) (BDV11Read(self, address & 0xFFFE) >> 8);
+	} else {
+		return (u8) BDV11Read(self, address & 0xFFFE);
 	}
 }
 
@@ -139,13 +130,56 @@ void BDV11Write(void* self, u16 address, u16 value)
 	}
 }
 
+void BDV11Write8(void* self, u16 address, u8 value)
+{
+	BDV11* bdv = (BDV11*) self;
+
+	u16 tmp;
+
+	switch(address) {
+		case 0177520:
+			tmp = bdv->pcr;
+			bdv->pcr = (bdv->pcr & 0xFF00) | value;
+			if(tmp != bdv->pcr) {
+				BDV11MemoryDump(bdv, bdv->pcr, 0);
+			}
+			break;
+		case 0177521:
+			tmp = bdv->pcr;
+			bdv->pcr = (bdv->pcr & 0xFF) | (value << 8);
+			if(tmp != bdv->pcr) {
+				BDV11MemoryDump(bdv, bdv->pcr, 1);
+			}
+			break;
+		case 0177522:
+			bdv->scratch = (bdv->scratch & 0xFF00) | value;
+			break;
+		case 0177523:
+			bdv->scratch = (bdv->scratch & 0xFF) | (value << 8);
+			break;
+		case 0177524:
+			bdv->display = (bdv->display & 0xFF00) | value;
+			break;
+		case 0177525:
+			bdv->display = (bdv->display & 0xFF) | (value << 8);
+			break;
+		case 0177546:
+			bdv->ltc = value & 0100;
+			break;
+	}
+}
+
 u8 BDV11Responsible(void* self, u16 address)
 {
 	switch(address) {
 		case 0177520:
+		case 0177521:
 		case 0177522:
+		case 0177523:
 		case 0177524:
+		case 0177525:
 		case 0177546:
+		case 0177547:
 			return 1;
 		default:
 			return address >= 0173000 && address <= 0173776;
@@ -155,8 +189,6 @@ u8 BDV11Responsible(void* self, u16 address)
 void BDV11Reset(void* self)
 {
 	BDV11* bdv = (BDV11*) self;
-
-	bdv->module.irq	= 0;
 
 	bdv->pcr = 0;
 	bdv->scratch = 0;
@@ -172,10 +204,12 @@ void BDV11Init(BDV11* bdv)
 	bdv->module.self = (void*) bdv;
 	bdv->module.read = BDV11Read;
 	bdv->module.write = BDV11Write;
+	bdv->module.read8 = BDV11Read8;
+	bdv->module.write8 = BDV11Write8;
 	bdv->module.responsible = BDV11Responsible;
 	bdv->module.reset = BDV11Reset;
 
-	bdv->module.irq	= 0;
+	bdv->sw = BDV11_SWITCH;
 }
 
 void BDV11Destroy(BDV11* bdv)
@@ -187,15 +221,9 @@ void BDV11Step(BDV11* bdv, float dt)
 {
 	if(bdv->ltc & 0100) {
 		bdv->time += dt;
-		if(bdv->module.irq) {
-			QBUS* bus = bdv->module.bus;
-			if(bus->interrupt(bus, bdv->module.irq))
-				bdv->module.irq = 0;
-		}
 		if(bdv->time >= LTC_TIME) {
 			QBUS* bus = bdv->module.bus;
-			if(!bus->interrupt(bus, 0100))
-				bdv->module.irq = 0100;
+			bus->interrupt(bus, 0100);
 			bdv->time -= LTC_TIME;
 			if(bdv->time >= LTC_TIME) {
 				bdv->time = 0;
@@ -204,4 +232,9 @@ void BDV11Step(BDV11* bdv, float dt)
 	} else {
 		bdv->time = 0;
 	}
+}
+
+void BDV11SetSwitch(BDV11* bdv, u16 sw)
+{
+	bdv->sw = sw;
 }

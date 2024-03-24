@@ -40,6 +40,25 @@
 #define	LTC_RATE		50
 #define	LTC_TIME		(1.0 / LTC_RATE)
 
+/* BDV11 switches */
+#define	_A(x)		(1 << ((x) - 1))
+#define	_B(x)		(1 << ((x) + 7))
+
+#define	BDV11_CPU_TEST	_A(1)
+#define	BDV11_MEM_TEST	_A(2)
+#define	BDV11_DECNET	_A(3)
+#define	BDV11_DIALOG	_A(4)
+#define	BDV11_LOOP	_B(1)
+#define	BDV11_RK05	_A(8)
+#define	BDV11_RL01	_A(7)
+#define	BDV11_RX01	_A(6)
+#define	BDV11_RX02	(_A(6) | _A(7))
+#define	BDV11_ROM	_A(5)
+
+#define	BDV11_EXT_DIAG	_B(2)
+#define	BDV11_2780	_B(3)
+#define	BDV11_PROG_ROM	_B(4)
+
 typedef struct {
 	u16	addr;
 	u16	val;
@@ -65,10 +84,17 @@ struct QBUS {
 	u16	trap;
 	u16	delay;
 	u16	irq;
+	u16	nxm;
 	int	(*interrupt)(QBUS* self, int n);
 	void	(*reset)(QBUS* self);
 	u16	(*read)(void* user, u16 addr);
 	void	(*write)(void* user, u16 addr, u16 value);
+	u8	(*read8)(void* user, u16 addr);
+	void	(*write8)(void* user, u16 addr, u8 value);
+	u16	(*readDMA)(void* user, u16 addr, BOOL* nxm);
+	BOOL	(*writeDMA)(void* user, u16 addr, u16 value);
+	u8	(*read8DMA)(void* user, u16 addr, BOOL* nxm);
+	BOOL	(*write8DMA)(void* user, u16 addr, u8 value);
 };
 
 typedef struct {
@@ -76,6 +102,8 @@ typedef struct {
 	void*	self;
 	u16	(*read)(void* self, u16 addr);
 	void	(*write)(void* self, u16 addr, u16 value);
+	u8	(*read8)(void* self, u16 addr);
+	void	(*write8)(void* self, u16 addr, u8 value);
 	u8	(*responsible)(void* self, u16 addr);
 	void	(*reset)(void* self);
 	int	irq;
@@ -122,6 +150,7 @@ typedef struct {
 	u16	option;
 	u16	display;
 	u16	ltc;
+	u16	sw;
 	float	time;
 } BDV11;
 
@@ -142,9 +171,40 @@ typedef struct {
 	u16	state;
 	u16	error;
 
+	u16	nxm;
+
 	u16	buffer[128];
-	u8*	data;
+	u8*	data0;
+	u8*	data1;
 } RXV21;
+
+typedef struct {
+	QBUSMod	module;
+	u16	csr;
+	u16	bar;
+	u16	dar;
+	u16	bae;
+	u16	wc;
+
+	u16	state;
+	u16	fifo[8];
+	u16	error;
+
+	BOOL	nxm;
+
+	u16	hs[4];
+	u16	ca[4];
+	u16	sa[4];
+
+	u16	dma[256];
+
+	u16	opi_timer;
+
+	u16*	data0;
+	u16*	data1;
+	u16*	data2;
+	u16*	data3;
+} RLV12;
 
 void MSV11DInit(MSV11D* msv);
 void MSV11DDestroy(MSV11D* msv);
@@ -157,11 +217,20 @@ void DLV11JStep(DLV11J* dlv);
 void BDV11Init(BDV11* bdv);
 void BDV11Destroy(BDV11* bdv);
 void BDV11Step(BDV11* bdv, float dt);
+void BDV11SetSwitch(BDV11* bdv, u16 sw);
 
 void RXV21Init(RXV21* rx);
 void RXV21Destroy(RXV21* rx);
-void RXV21SetData(RXV21* rx, u8* data);
+void RXV21SetData0(RXV21* rx, u8* data);
+void RXV21SetData1(RXV21* rx, u8* data);
 void RXV21Step(RXV21* rx);
+
+void RLV12Init(RLV12* rl);
+void RLV12Step(RLV12* rl);
+void RLV12SetData0(RLV12* rl, u8* data);
+void RLV12SetData1(RLV12* rl, u8* data);
+void RLV12SetData2(RLV12* rl, u8* data);
+void RLV12SetData3(RLV12* rl, u8* data);
 
 /* KD11 subroutines */
 void KD11Init(KD11* kd11);

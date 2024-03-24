@@ -4,13 +4,15 @@
 #include "lsi11.h"
 #include "trace.h"
 
-static u16 LSI11Read(void* user, u16 address)
+static u16 LSI11ReadDMA(void* user, u16 address, BOOL* nxm)
 {
 	u8 i;
 	u16 addr = address;
 	LSI11* lsi = (LSI11*) user;
 
 	address &= 0xFFFE;
+
+	*nxm = FALSE;
 
 	for(i = 0; i < LSI11_SIZE; i++) {
 		QBUSMod* module = lsi->backplane[i];
@@ -24,12 +26,37 @@ static u16 LSI11Read(void* user, u16 address)
 		}
 	}
 
+	*nxm = TRUE;
 	TRCBus(TRC_BUS_RDFAIL, addr, 0);
-	lsi->bus.interrupt(&lsi->bus, 004);
 	return 0;
 }
 
-static void LSI11Write(void* user, u16 address, u16 value)
+static u8 LSI11Read8DMA(void* user, u16 address, BOOL* nxm)
+{
+	u8 i;
+	u16 addr = address;
+	LSI11* lsi = (LSI11*) user;
+
+	*nxm = FALSE;
+
+	for(i = 0; i < LSI11_SIZE; i++) {
+		QBUSMod* module = lsi->backplane[i];
+		if(!module || !module->responsible) {
+			continue;
+		}
+		if(module->responsible(module->self, address)) {
+			u8 value = module->read8(module->self, address);
+			TRCBus(TRC_BUS_RD8, addr, value);
+			return value;
+		}
+	}
+
+	*nxm = TRUE;
+	TRCBus(TRC_BUS_RD8FAIL, addr, 0);
+	return 0;
+}
+
+static BOOL LSI11WriteDMA(void* user, u16 address, u16 value)
 {
 	u8 i;
 	LSI11* lsi = (LSI11*) user;
@@ -44,12 +71,79 @@ static void LSI11Write(void* user, u16 address, u16 value)
 		if(module->responsible(module->self, address)) {
 			TRCBus(TRC_BUS_WR, address, value);
 			module->write(module->self, address, value);
-			return;
+			return FALSE;
 		}
 	}
 
 	TRCBus(TRC_BUS_WRFAIL, address, value);
-	lsi->bus.interrupt(&lsi->bus, 004);
+	return TRUE;
+}
+
+static BOOL LSI11Write8DMA(void* user, u16 address, u8 value)
+{
+	u8 i;
+	LSI11* lsi = (LSI11*) user;
+
+	for(i = 0; i < LSI11_SIZE; i++) {
+		QBUSMod* module = lsi->backplane[i];
+		if(!module || !module->responsible) {
+			continue;
+		}
+		if(module->responsible(module->self, address)) {
+			TRCBus(TRC_BUS_WR8, address, value);
+			module->write8(module->self, address, value);
+			return FALSE;
+		}
+	}
+
+	TRCBus(TRC_BUS_WR8FAIL, address, value);
+	return TRUE;
+}
+
+static u16 LSI11Read(void* user, u16 address)
+{
+	BOOL nxm;
+	LSI11* lsi = (LSI11*) user;
+
+	u16 data = LSI11ReadDMA(user, address, &nxm);
+
+	if(nxm) {
+		lsi->bus.nxm = 1;
+	}
+
+	return data;
+}
+
+static u8 LSI11Read8(void* user, u16 address)
+{
+	BOOL nxm;
+	LSI11* lsi = (LSI11*) user;
+
+	u8 data = LSI11Read8DMA(user, address, &nxm);
+
+	if(nxm) {
+		lsi->bus.nxm = 1;
+	}
+
+	return data;
+}
+
+static void LSI11Write(void* user, u16 address, u16 value)
+{
+	LSI11* lsi = (LSI11*) user;
+
+	if(LSI11WriteDMA(user, address, value)) {
+		lsi->bus.nxm = 1;
+	}
+}
+
+static void LSI11Write8(void* user, u16 address, u8 value)
+{
+	LSI11* lsi = (LSI11*) user;
+
+	if(LSI11Write8DMA(user, address, value)) {
+		lsi->bus.nxm = 1;
+	}
 }
 
 #define	IRCJITTER()	(rand() % QBUS_DELAY_JITTER)
@@ -73,6 +167,17 @@ static int LSI11QBUSInterrupt(QBUS* bus, int n)
 	}
 }
 
+void LSI11QBUSCancelInterrupt(QBUS* bus, int n)
+{
+	if(bus->irq == n) {
+		bus->irq = 0;
+	}
+
+	if(bus->trap == n) {
+		bus->trap = 0;
+	}
+}
+
 static void LSI11QBUSReset(QBUS* bus)
 {
 	u8 i;
@@ -84,6 +189,7 @@ static void LSI11QBUSReset(QBUS* bus)
 	bus->trap = 0;
 	bus->irq = 0;
 	bus->delay = 0;
+	bus->nxm = 0;
 
 	for(i = 0; i < LSI11_SIZE; i++) {
 		QBUSMod* module = lsi->backplane[i];
@@ -113,11 +219,16 @@ void LSI11Init(LSI11* lsi)
 {
 	KD11Init(&lsi->cpu);
 	lsi->bus.trap = 0;
-	lsi->bus.delay = 0;
-	lsi->bus.irq = 0;
+	lsi->bus.nxm = 0;
 	lsi->bus.user = (void*) lsi;
 	lsi->bus.read = LSI11Read;
 	lsi->bus.write = LSI11Write;
+	lsi->bus.read8 = LSI11Read8;
+	lsi->bus.write8 = LSI11Write8;
+	lsi->bus.readDMA = LSI11ReadDMA;
+	lsi->bus.writeDMA = LSI11WriteDMA;
+	lsi->bus.read8DMA = LSI11Read8DMA;
+	lsi->bus.write8DMA = LSI11Write8DMA;
 	lsi->bus.interrupt = LSI11QBUSInterrupt;
 	lsi->bus.reset = LSI11QBUSReset;
 

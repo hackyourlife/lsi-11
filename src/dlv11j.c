@@ -128,6 +128,27 @@ void DLV11JWrite(void* self, u16 address, u16 value)
 	}
 }
 
+u8 DLV11JRead8(void* self, u16 address)
+{
+	if(address & 1) {
+		return (u8) (DLV11JRead(self, address & 0xFFFE) >> 8);
+	} else {
+		return (u8) DLV11JRead(self, address & 0xFFFE);
+	}
+}
+
+void DLV11JWrite8(void* self, u16 address, u8 value)
+{
+	u16 aaddr = address & 0xFFFE;
+	u16 tmp = DLV11JRead(self, aaddr);
+	if(address & 1) {
+		tmp = (tmp & 0x00FF) | (value << 8);
+	} else {
+		tmp = (tmp & 0xFF00) | value;
+	}
+	DLV11JWrite(self, aaddr, tmp);
+}
+
 u8 DLV11JResponsible(void* self, u16 address)
 {
 	DLV11J* dlv = (DLV11J*) self;
@@ -137,7 +158,7 @@ u8 DLV11JResponsible(void* self, u16 address)
 	}
 
 	/* console device */
-	if(address >= 0177560 && address <= 0177566) {
+	if(address >= 0177560 && address <= 0177567) {
 		return 1;
 	}
 
@@ -166,6 +187,8 @@ void DLV11JInit(DLV11J* dlv)
 	dlv->module.self = (void*) dlv;
 	dlv->module.read = DLV11JRead;
 	dlv->module.write = DLV11JWrite;
+	dlv->module.read8 = DLV11JRead8;
+	dlv->module.write8 = DLV11JWrite8;
 	dlv->module.responsible = DLV11JResponsible;
 	dlv->module.reset = DLV11JReset;
 

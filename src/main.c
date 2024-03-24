@@ -9,6 +9,7 @@
 #include <unistd.h>
 #include <termios.h>
 #include <signal.h>
+#include <errno.h>
 
 #include "lsi11.h"
 #include "trace.h"
@@ -93,14 +94,56 @@ void sigint_handler(int signum)
 	running = 0;
 }
 
+#define DISK_SIZE (2 * 40 * 512 * 256)
+static u32 rl02_serial = 0;
+void init_rl02(u8* disk)
+{
+	if(rl02_serial == 0) {
+		struct timespec now;
+		clock_gettime(CLOCK_REALTIME, &now);
+		rl02_serial = (now.tv_sec & 0xFFFFFFFFL) ^ ((now.tv_sec >> 32) & 0xFFFFFFFFL);
+	}
+
+	u16 serial_lo = rl02_serial & 0x7F;
+	u16 serial_hi = (rl02_serial >> 15) & 0x7F;
+	rl02_serial++;
+
+	memset(disk, 0, DISK_SIZE);
+	memset(disk + 0x9fd800, 0xFF, 0x400);
+	memset(disk + 0x9fec00, 0xFF, 0x400);
+
+	disk[0x9fd800] = (unsigned char)  serial_lo;
+	disk[0x9fd801] = (unsigned char) (serial_lo >> 8);
+	disk[0x9fd802] = (unsigned char)  serial_hi;
+	disk[0x9fd803] = (unsigned char) (serial_hi >> 8);
+	disk[0x9fd804] = 0;
+	disk[0x9fd805] = 0;
+	disk[0x9fd806] = 0;
+	disk[0x9fd807] = 0;
+
+	disk[0x9fec00] = (unsigned char)  serial_lo;
+	disk[0x9fec01] = (unsigned char) (serial_lo >> 8);
+	disk[0x9fec02] = (unsigned char)  serial_hi;
+	disk[0x9fec03] = (unsigned char) (serial_hi >> 8);
+	disk[0x9fec04] = 0;
+	disk[0x9fec05] = 0;
+	disk[0x9fec06] = 0;
+	disk[0x9fec07] = 0;
+}
+
 #define	READ(addr)		lsi.bus.read(lsi.bus.user, (addr))
 #define	WRITE(addr, val)	lsi.bus.write(lsi.bus.user, (addr), (val))
+
+#define	BOOT_NONE	0
+#define	BOOT_RX02	1
+#define	BOOT_RL02	2
 
 int main(int argc, char** argv)
 {
 	LSI11 lsi;
 	MSV11D msv11;
 	RXV21 rxv21;
+	RLV12 rlv12;
 	DLV11J dlv11;
 	BDV11 bdv11;
 
@@ -112,24 +155,46 @@ int main(int argc, char** argv)
 
 	const char* self = *argv;
 	FILE* floppy_file;
-	u8* floppy;
+	u8* floppy0;
+	u8* floppy1;
+	u8* disk0 = NULL;
+	u8* disk1 = NULL;
+	u8* disk2 = NULL;
+	u8* disk3 = NULL;
+
+	int bootdev = BOOT_NONE;
+	u16 dialog = BDV11_DIALOG;
+	u16 tests = BDV11_CPU_TEST | BDV11_MEM_TEST;
 
 	struct termios tio;
 	struct sigaction sa;
 
-	const char* floppy_filename = NULL;
+	const char* floppy_filename0 = NULL;
+	const char* floppy_filename1 = NULL;
+	const char* disk_filename0 = NULL;
+	const char* disk_filename1 = NULL;
+	const char* disk_filename2 = NULL;
+	const char* disk_filename3 = NULL;
 	const char* load_file = NULL;
 	int halt = 0;
 	int bootstrap = 0;
 	const char* trace_file = NULL;
-	int compress = 0;
+	int compress = 1;
+
+	int dump_disk0 = 0;
+	int dump_disk1 = 0;
+	int dump_disk2 = 0;
+	int dump_disk3 = 0;
 
 	int exit_on_halt = 0;
+
+	int notty = 0;
+	const char* console_input = NULL;
 
 #ifndef DEBUG
 	if(tcgetattr(0, &original_tio) == -1) {
 		printf("Failed to retrieve TTY configuration\n");
-		return 1;
+		notty = 1;
 	}
 #endif
 
@@ -141,20 +206,58 @@ int main(int argc, char** argv)
 			halt = 1;
 		} else if(!strcmp("-b", *argv)) {
 			bootstrap = 1;
-		} else if(!strcmp("-z", *argv)) {
-			compress = 1;
+		} else if(!strcmp("-nz", *argv)) {
+			compress = 0;
 		} else if(!strcmp("-x", *argv)) {
 			exit_on_halt = 1;
 		} else if(!strcmp("-l", *argv) && argc > 1) {
 			load_file = argv[1];
 			argc--;
 			argv++;
-		} else if(!strcmp("-f", *argv) && argc > 1) {
-			floppy_filename = argv[1];
+		} else if((!strcmp("-f", *argv) || !strcmp("-f0", *argv)) && argc > 1) {
+			bootdev = BOOT_RX02;
+			floppy_filename0 = argv[1];
 			argc--;
 			argv++;
+		} else if(!strcmp("-f1", *argv) && argc > 1) {
+			floppy_filename1 = argv[1];
+			argc--;
+			argv++;
+		} else if((!strcmp("-d", *argv) || !strcmp("-d0", *argv)) && argc > 1) {
+			bootdev = BOOT_RL02;
+			disk_filename0 = argv[1];
+			argc--;
+			argv++;
+		} else if(!strcmp("-d1", *argv) && argc > 1) {
+			disk_filename1 = argv[1];
+			argc--;
+			argv++;
+		} else if(!strcmp("-d2", *argv) && argc > 1) {
+			disk_filename2 = argv[1];
+			argc--;
+			argv++;
+		} else if(!strcmp("-d3", *argv) && argc > 1) {
+			disk_filename3 = argv[1];
+			argc--;
+			argv++;
+		} else if(!strcmp("-sd0", *argv) || !strcmp("-sd", *argv)) {
+			dump_disk0 = 1;
+		} else if(!strcmp("-sd1", *argv)) {
+			dump_disk1 = 1;
+		} else if(!strcmp("-sd2", *argv)) {
+			dump_disk2 = 1;
+		} else if(!strcmp("-sd3", *argv)) {
+			dump_disk3 = 1;
+		} else if(!strcmp("-q", *argv)) {
+			dialog = 0;
+		} else if(!strcmp("-n", *argv)) {
+			tests = 0;
 		} else if(!strcmp("-t", *argv) && argc > 1) {
 			trace_file = argv[1];
+			argc--;
+			argv++;
+		} else if(!strcmp("-c", *argv) && argc > 1) {
+			console_input = argv[1];
 			argc--;
 			argv++;
 		} else if(**argv != '-') {
@@ -168,10 +271,14 @@ int main(int argc, char** argv)
 					"  -b              Enter RX02 double density bootstrap program\n"
 					"  -l file.bin     Load file.bin in absolute loader format\n"
 					"  -f file.rx2     Load RX02 floppy image from file.rx2\n"
+					"  -d file.rl2     Load RL02 disk image from file.rl2\n"
+					"  -sd             Store updated RL02 disk in file\n"
+					"  -q              Skip BDV11 console test\n"
+					"  -n              Skip BDV11 CPU and memory tests\n"
 					"  -t file.trc     Record execution trace to file.trc\n"
-					"  -z              Use delta compression fo rexecution trace\n"
+					"  -nz             Don't use delta compression for execution trace\n"
 					"\n"
-					"The optional last argument FILE is equivalent to -f file\n", self);
+					"The optional last argument FILE is equivalent to -l file\n", self);
 			return 0;
 		} else {
 			printf("Unknown option: %s\n", *argv);
@@ -183,27 +290,116 @@ int main(int argc, char** argv)
 	DLV11JInit(&dlv11);
 	BDV11Init(&bdv11);
 	RXV21Init(&rxv21);
+	RLV12Init(&rlv12);
 
-	floppy = (u8*) malloc(77 * 26 * 256);
-	if(!floppy) {
+	switch(bootdev) {
+		default:
+		case BOOT_NONE:
+			BDV11SetSwitch(&bdv11, tests | dialog);
+			break;
+		case BOOT_RX02:
+			BDV11SetSwitch(&bdv11, tests | dialog | BDV11_RX02);
+			break;
+		case BOOT_RL02:
+			BDV11SetSwitch(&bdv11, tests | dialog | BDV11_RL01);
+			break;
+	}
+
+	floppy0 = (u8*) malloc(77 * 26 * 256);
+	floppy1 = (u8*) malloc(77 * 26 * 256);
+	if(!floppy0 || !floppy1) {
 		printf("Error: cannot allocate memory\n");
 		return 1;
 	}
 
-	if(floppy_filename) {
-		floppy_file = fopen(floppy_filename, "rb");
+	if(floppy_filename0) {
+		floppy_file = fopen(floppy_filename0, "rb");
 		if(!floppy_file) {
-			printf("Error: cannot open file %s\n", floppy_filename);
-			free(floppy);
+			printf("Error: cannot open file %s\n", floppy_filename0);
+			free(floppy0);
 			return 1;
 		}
-		fread(floppy, 77 * 26 * 256, 1, floppy_file);
+		fread(floppy0, 77 * 26 * 256, 1, floppy_file);
 		fclose(floppy_file);
 	} else {
-		memset(floppy, 0, 77 * 26 * 256);
+		memset(floppy0, 0, 77 * 26 * 256);
 	}
 
-	RXV21SetData(&rxv21, floppy);
+	if(floppy_filename1) {
+		floppy_file = fopen(floppy_filename1, "rb");
+		if(!floppy_file) {
+			printf("Error: cannot open file %s\n", floppy_filename1);
+			free(floppy0);
+			return 1;
+		}
+		fread(floppy1, 77 * 26 * 256, 1, floppy_file);
+		fclose(floppy_file);
+	} else {
+		memset(floppy1, 0, 77 * 26 * 256);
+	}
+
+	RXV21SetData0(&rxv21, floppy0);
+	RXV21SetData1(&rxv21, floppy1);
+
+	if(disk_filename0) {
+		disk0 = (u8*) malloc(DISK_SIZE);
+		init_rl02(disk0);
+
+		FILE* file = fopen(disk_filename0, "rb");
+		if(!file) {
+			printf("Error: cannot open file %s: %s\n", disk_filename0, strerror(errno));
+		} else {
+			fread(disk0, DISK_SIZE, 1, file);
+			fclose(file);
+		}
+
+		RLV12SetData0(&rlv12, disk0);
+	}
+
+	if(disk_filename1) {
+		disk1 = (u8*) malloc(DISK_SIZE);
+		init_rl02(disk1);
+
+		FILE* file = fopen(disk_filename1, "rb");
+		if(!file) {
+			printf("Error: cannot open file %s: %s\n", disk_filename1, strerror(errno));
+		} else {
+			fread(disk1, DISK_SIZE, 1, file);
+			fclose(file);
+		}
+
+		RLV12SetData1(&rlv12, disk1);
+	}
+
+	if(disk_filename2) {
+		disk2 = (u8*) malloc(DISK_SIZE);
+		init_rl02(disk2);
+
+		FILE* file = fopen(disk_filename2, "rb");
+		if(!file) {
+			printf("Error: cannot open file %s: %s\n", disk_filename2, strerror(errno));
+		} else {
+			fread(disk2, DISK_SIZE, 1, file);
+			fclose(file);
+		}
+
+		RLV12SetData2(&rlv12, disk2);
+	}
+
+	if(disk_filename3) {
+		disk3 = (u8*) malloc(DISK_SIZE);
+		init_rl02(disk3);
+
+		FILE* file = fopen(disk_filename3, "rb");
+		if(!file) {
+			printf("Error: cannot open file %s: %s\n", disk_filename3, strerror(errno));
+		} else {
+			fread(disk3, DISK_SIZE, 1, file);
+			fclose(file);
+		}
+
+		RLV12SetData3(&rlv12, disk3);
+	}
 
 	dlv11.channel[3].receive = console_print;
 
@@ -217,9 +413,10 @@ int main(int argc, char** argv)
 
 	LSI11Init(&lsi);
 	LSI11InstallModule(&lsi, 1, &msv11.module);
-	LSI11InstallModule(&lsi, 2, &rxv21.module);
-	LSI11InstallModule(&lsi, 3, &dlv11.module);
-	LSI11InstallModule(&lsi, 4, &bdv11.module);
+	LSI11InstallModule(&lsi, 2, &rlv12.module);
+	LSI11InstallModule(&lsi, 3, &rxv21.module);
+	LSI11InstallModule(&lsi, 4, &dlv11.module);
+	LSI11InstallModule(&lsi, 5, &bdv11.module);
 	LSI11Reset(&lsi);
 
 	if(bootstrap) {
@@ -258,12 +455,14 @@ int main(int argc, char** argv)
 			if(c == EOF) {
 				printf("error: unexpected EOF\n");
 				fclose(f);
-				free(floppy);
+				free(floppy0);
+				free(floppy1);
 				return 1;
 			} else if(c != 0) {
 				printf("error: invalid signature! [%02x]\n", c);
 				fclose(f);
-				free(floppy);
+				free(floppy0);
+				free(floppy1);
 				return 1;
 			}
 			fread(&len, 2, 1, f);
@@ -298,12 +497,14 @@ int main(int argc, char** argv)
 	}
 
 	/* set raw mode */
-	tio = original_tio;
-	tio.c_iflag &= ~(ICRNL | INPCK | ISTRIP);
-	tio.c_oflag &= ~OPOST;
-	tio.c_cflag |= CS8;
-	tio.c_lflag &= ~(ECHO | ICANON | IEXTEN);
-	tcsetattr(0, TCSANOW, &tio);
+	if(!notty) {
+		tio = original_tio;
+		tio.c_iflag &= ~(ICRNL | INPCK | ISTRIP);
+		tio.c_oflag &= ~OPOST;
+		tio.c_cflag |= CS8;
+		tio.c_lflag &= ~(ECHO | ICANON | IEXTEN);
+		tcsetattr(0, TCSANOW, &tio);
+	}
 #endif
 
 	running = 1;
@@ -316,6 +517,8 @@ int main(int argc, char** argv)
 
 	clock_gettime(CLOCK_MONOTONIC, &last);
 
+	const char* console_in = console_input;
+	int delay = 0;
 	while(running) {
 		unsigned int i;
 		double dt;
@@ -333,6 +536,12 @@ int main(int argc, char** argv)
 				c = '\r';
 #endif
 			DLV11JSend(&dlv11, 3, c);
+		}
+
+		if(delay++ >= 500 && console_in && *console_in) {
+			LSI11ConsoleSend(&dlv11, *console_in);
+			console_in++;
+			delay = 0;
 		}
 
 		for(i = 0; i < 1000; i++)
@@ -353,9 +562,11 @@ int main(int argc, char** argv)
 		BDV11Step(&bdv11, dt);
 		DLV11JStep(&dlv11);
 		RXV21Step(&rxv21);
+		RLV12Step(&rlv12);
 	}
 
-	free(floppy);
+	free(floppy0);
+	free(floppy1);
 
 	DLV11JDestroy(&dlv11);
 	BDV11Destroy(&bdv11);
@@ -363,9 +574,48 @@ int main(int argc, char** argv)
 	MSV11DDestroy(&msv11);
 	LSI11Destroy(&lsi);
 
-	tcsetattr(0, TCSANOW, &original_tio);
+	if(!notty) {
+		tcsetattr(0, TCSANOW, &original_tio);
+	}
 
 	printf("\n");
+
+	if(disk0) {
+		if(dump_disk0) {
+			printf("dumping RL02 unit 0 to %s\n", disk_filename0);
+			FILE* file = fopen(disk_filename0, "wb");
+			fwrite(disk0, DISK_SIZE, 1, file);
+			fclose(file);
+		}
+		free(disk0);
+	}
+	if(disk1) {
+		if(dump_disk1) {
+			printf("dumping RL02 unit 1 to %s\n", disk_filename1);
+			FILE* file = fopen(disk_filename1, "wb");
+			fwrite(disk1, DISK_SIZE, 1, file);
+			fclose(file);
+		}
+		free(disk1);
+	}
+	if(disk2) {
+		if(dump_disk2) {
+			printf("dumping RL02 unit 2 to %s\n", disk_filename2);
+			FILE* file = fopen(disk_filename2, "wb");
+			fwrite(disk2, DISK_SIZE, 1, file);
+			fclose(file);
+		}
+		free(disk2);
+	}
+	if(disk3) {
+		if(dump_disk3) {
+			printf("dumping RL02 unit 3 to %s\n", disk_filename3);
+			FILE* file = fopen(disk_filename3, "wb");
+			fwrite(disk2, DISK_SIZE, 1, file);
+			fclose(file);
+		}
+		free(disk3);
+	}
 
 	if(trace_file) {
 		TRCFINISH();

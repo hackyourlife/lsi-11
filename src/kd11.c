@@ -15,6 +15,8 @@
 #define	ODT_STATE_VAL		5
 #define	ODT_STATE_REG_VAL	6
 #define	ODT_STATE_WR		7
+#define	ODT_STATE_SEMICOLON	8
+#define	ODT_STATE_ADDR_SC	9
 
 /* CPU states */
 #define	STATE_HALT		0
@@ -131,6 +133,8 @@ typedef struct {
 } KD11INSNSOB;
 #endif
 
+static int KD11HasPendingIRQ(KD11* kd11, QBUS* bus);
+
 void KD11Init(KD11* kd11)
 {
 	memset(kd11, 0, sizeof(KD11));
@@ -147,8 +151,10 @@ void KD11Reset(KD11* kd11)
 
 #define	READ(addr)		(bus->read(bus->user, (addr)))
 #define	WRITE(addr, val)	(bus->write(bus->user, (addr), (val)))
+#define	READ8(addr)		(bus->read8(bus->user, (addr)))
+#define	WRITE8(addr, val)	(bus->write8(bus->user, (addr), (val)))
 #define	CHECK()			{ \
-	if(kd11->trap && kd11->trap <= 010) \
+	if((kd11->trap && kd11->trap <= 010) || bus->nxm) \
 		return; \
 	}
 
@@ -233,6 +239,8 @@ void KD11ODTStep(KD11* kd11, QBUS* bus)
 						odt->state = ODT_STATE_INIT;
 						kd11->state = STATE_RUN;
 						TRCCPUEvent(TRC_CPU_ODT_P, kd11->r[7]);
+					case ';':
+						odt->state = ODT_STATE_SEMICOLON;
 						break;
 					default:
 						KD11ODTInputError(odt);
@@ -256,19 +264,51 @@ void KD11ODTStep(KD11* kd11, QBUS* bus)
 				if((u8) c == '/') { /* delimit */
 					u16 val = READ(odt->addr);
 					KD11ODTClear(odt);
-					KD11ODTWriteOctal(odt, val);
-					KD11ODTWrite(odt, ' ');
-					odt->next = ODT_STATE_VAL;
-					odt->state = ODT_STATE_WR;
-					odt->input = 0;
+					if(bus->nxm) {
+						bus->nxm = 0;
+					} else {
+						KD11ODTWriteOctal(odt, val);
+						KD11ODTWrite(odt, ' ');
+						odt->next = ODT_STATE_VAL;
+						odt->state = ODT_STATE_WR;
+						odt->input = 0;
+						odt->val = 0;
+					}
 				} else if(c >= '0' && c <= '7') {
 					odt->addr <<= 3;
 					odt->addr |= c - '0';
+				} else if(c == 0177) {
+					WRITE(0177566, '\\');
+					odt->addr >>= 3;
 				} else if(c == 'G') {
 					odt->state = ODT_STATE_INIT;
 					kd11->r[7] = odt->addr;
 					kd11->state = STATE_RUN;
 					TRCCPUEvent(TRC_CPU_ODT_G, odt->addr);
+					bus->reset(bus);
+				} else if(c == 'L') {
+					TRCCPUEvent(TRC_CPU_ODT_L, odt->addr);
+					/* TODO: size RAM instead of assuming 28K */
+					WRITE(0157744, 0016701);
+					WRITE(0157746, 0000026);
+					WRITE(0157750, 0012702);
+					WRITE(0157752, 0000352);
+					WRITE(0157754, 0005211);
+					WRITE(0157756, 0105711);
+					WRITE(0157760, 0100376);
+					WRITE(0157762, 0116162);
+					WRITE(0157764, 0000002);
+					WRITE(0157766, 0157400);
+					WRITE(0157770, 0005267);
+					WRITE(0157772, 0177756);
+					WRITE(0157774, 0000765);
+					WRITE(0157776, odt->addr);
+					odt->state = ODT_STATE_INIT;
+					kd11->r[7] = 0157744;
+					kd11->state = STATE_RUN;
+					bus->reset(bus);
+				} else if(c == ';') {
+					odt->state = ODT_STATE_ADDR_SC;
 				} else {
 					KD11ODTInputError(odt);
 				}
@@ -294,7 +334,8 @@ void KD11ODTStep(KD11* kd11, QBUS* bus)
 				u16 ch = READ(0177562);
 				u8 c = (u8) ch;
 				WRITE(0177566, c);
-				if(c == '\r' || c == '\n') {
+				if(c == '\r' || c == '\n' || c == '^'
+						|| c == '@' || c == '_') {
 					if(odt->input) {
 						WRITE(odt->addr, odt->val);
 					}
@@ -302,6 +343,9 @@ void KD11ODTStep(KD11* kd11, QBUS* bus)
 					odt->val <<= 3;
 					odt->val |= c - '0';
 					odt->input = 1;
+				} else if(c == 0177) {
+					WRITE(0177566, '\\');
+					odt->val >>= 3;
 				} else {
 					KD11ODTInputError(odt);
 				}
@@ -320,16 +364,66 @@ void KD11ODTStep(KD11* kd11, QBUS* bus)
 					val = READ(odt->addr);
 
 					KD11ODTClear(odt);
-					KD11ODTWrite(odt, '\r');
-					KD11ODTWrite(odt, '\n');
-					KD11ODTWriteOctal(odt, odt->addr);
-					KD11ODTWrite(odt, '/');
-					KD11ODTWriteOctal(odt, val);
-					KD11ODTWrite(odt, ' ');
+					if(bus->nxm) {
+						bus->nxm = 0;
+						KD11ODTInputError(odt);
+					} else {
+						KD11ODTWrite(odt, '\r');
+						KD11ODTWriteOctal(odt, odt->addr);
+						KD11ODTWrite(odt, '/');
+						KD11ODTWriteOctal(odt, val);
+						KD11ODTWrite(odt, ' ');
 
-					odt->next = ODT_STATE_VAL;
-					odt->state = ODT_STATE_WR;
-					odt->input = 0;
+						odt->next = ODT_STATE_VAL;
+						odt->state = ODT_STATE_WR;
+						odt->input = 0;
+					}
+				} else if(c == '^') {
+					u16 val;
+
+					odt->addr -= 2;
+					odt->val = 0;
+					val = READ(odt->addr);
+
+					KD11ODTClear(odt);
+					if(bus->nxm) {
+						bus->nxm = 0;
+						KD11ODTInputError(odt);
+					} else {
+						KD11ODTWrite(odt, '\r');
+						KD11ODTWrite(odt, '\n');
+						KD11ODTWriteOctal(odt, odt->addr);
+						KD11ODTWrite(odt, '/');
+						KD11ODTWriteOctal(odt, val);
+						KD11ODTWrite(odt, ' ');
+
+						odt->next = ODT_STATE_VAL;
+						odt->state = ODT_STATE_WR;
+						odt->input = 0;
+					}
+				} else if(c == '@') {
+					u16 val;
+
+					odt->addr = READ(odt->addr) & 0xFFFE;
+					odt->val = 0;
+					val = READ(odt->addr);
+
+					KD11ODTClear(odt);
+					if(bus->nxm) {
+						bus->nxm = 0;
+						KD11ODTInputError(odt);
+					} else {
+						KD11ODTWrite(odt, '\r');
+						KD11ODTWrite(odt, '\n');
+						KD11ODTWriteOctal(odt, odt->addr);
+						KD11ODTWrite(odt, '/');
+						KD11ODTWriteOctal(odt, val);
+						KD11ODTWrite(odt, ' ');
+
+						odt->next = ODT_STATE_VAL;
+						odt->state = ODT_STATE_WR;
+						odt->input = 0;
+					}
 				}
 			}
 			break;
@@ -362,7 +456,8 @@ void KD11ODTStep(KD11* kd11, QBUS* bus)
 				u16 ch = READ(0177562);
 				u8 c = (u8) ch;
 				WRITE(0177566, c);
-				if(c == '\r' || c == '\n') {
+				if(c == '\r' || c == '\n' || c == '^'
+						|| c == '@' || c == '_') {
 					if(odt->input) {
 						if(odt->addr == 8) {
 							kd11->psw = odt->val;
@@ -374,13 +469,21 @@ void KD11ODTStep(KD11* kd11, QBUS* bus)
 					odt->val <<= 3;
 					odt->val |= c - '0';
 					odt->input = 1;
+				} else if(c == 0177) {
+					WRITE(0177566, '\\');
+					odt->val >>= 3;
 				} else {
 					KD11ODTInputError(odt);
 				}
-				if(c == '\r' || (c == '\n' && odt->addr == 7)) {
+				if(c == '\r' || c == '_' || ((c == '\n' || c == '^')
+							&& odt->addr == 8)) {
 					KD11ODTClear(odt);
-					KD11ODTWrite(odt, '\r');
-					KD11ODTWrite(odt, '\n');
+					if(c != '\r') {
+						KD11ODTWrite(odt, '\r');
+					}
+					if(c != '\n') {
+						KD11ODTWrite(odt, '\n');
+					}
 					KD11ODTWrite(odt, '@');
 					odt->state = ODT_STATE_WR;
 					odt->next = ODT_STATE_WAIT;
@@ -388,6 +491,7 @@ void KD11ODTStep(KD11* kd11, QBUS* bus)
 					u16 val;
 
 					odt->addr++;
+					odt->addr &= 0x07;
 					odt->val = 0;
 					val = kd11->r[odt->addr];
 
@@ -402,6 +506,83 @@ void KD11ODTStep(KD11* kd11, QBUS* bus)
 					odt->next = ODT_STATE_REG_VAL;
 					odt->state = ODT_STATE_WR;
 					odt->input = 0;
+				} else if(c == '^') {
+					u16 val;
+
+					odt->addr--;
+					odt->addr &= 0x07;
+					odt->val = 0;
+					val = kd11->r[odt->addr];
+
+					KD11ODTClear(odt);
+					KD11ODTWrite(odt, '\r');
+					KD11ODTWrite(odt, '\n');
+					KD11ODTWrite(odt, 'R');
+					KD11ODTWrite(odt, odt->addr + '0');
+					KD11ODTWrite(odt, '/');
+					KD11ODTWriteOctal(odt, val);
+					KD11ODTWrite(odt, ' ');
+
+					odt->next = ODT_STATE_REG_VAL;
+					odt->state = ODT_STATE_WR;
+					odt->input = 0;
+				} else if(c == '@') {
+					u16 val;
+
+					odt->val = 0;
+					odt->addr = kd11->r[odt->addr] & 0xFFFE;
+					val = READ(odt->addr);
+
+					KD11ODTClear(odt);
+					if(bus->nxm) {
+						bus->nxm = 0;
+						KD11ODTInputError(odt);
+					} else {
+						KD11ODTWrite(odt, '\r');
+						KD11ODTWrite(odt, '\n');
+						KD11ODTWriteOctal(odt, odt->addr);
+						KD11ODTWrite(odt, '/');
+						KD11ODTWriteOctal(odt, val);
+						KD11ODTWrite(odt, ' ');
+
+						odt->next = ODT_STATE_VAL;
+						odt->state = ODT_STATE_WR;
+						odt->input = 0;
+					}
+				}
+			}
+			break;
+		case ODT_STATE_SEMICOLON:
+			if(READ(0177560) & 0x80) { /* ch available */
+				u16 c = READ(0177562);
+				WRITE(0177566, (u8) c);
+				switch((u8) c) {
+					case 'P':
+						odt->state = ODT_STATE_INIT;
+						kd11->state = STATE_RUN;
+						TRCCPUEvent(TRC_CPU_ODT_P, odt->addr);
+						break;
+					default:
+						KD11ODTInputError(odt);
+						break;
+				}
+			}
+			break;
+		case ODT_STATE_ADDR_SC:
+			if(READ(0177560) & 0x80) { /* ch available */
+				u16 c = READ(0177562);
+				WRITE(0177566, (u8) c);
+				switch((u8) c) {
+					case 'G':
+						odt->state = ODT_STATE_INIT;
+						kd11->r[7] = odt->addr;
+						kd11->state = STATE_RUN;
+						TRCCPUEvent(TRC_CPU_ODT_G, odt->addr);
+						bus->reset(bus);
+						break;
+					default:
+						KD11ODTInputError(odt);
+						break;
 				}
 			}
 			break;
@@ -409,7 +590,7 @@ void KD11ODTStep(KD11* kd11, QBUS* bus)
 }
 
 #define	CHECKREAD()		{ \
-	if(kd11->trap && kd11->trap <= 010) \
+	if(bus->nxm) \
 		return 0; \
 	}
 
@@ -483,9 +664,6 @@ u16 KD11CPUReadW(KD11* kd11, QBUS* bus, u16 dst, u16 mode, int inc)
 			return 0;
 	}
 }
-
-#define	READ8(addr) (((addr) & 1) ? (u8) (READ((addr) & 0xFFFE) >> 8) : \
-				((u8) READ(addr & 0xFFFE)))
 
 u8 KD11CPUReadB(KD11* kd11, QBUS* bus, u16 dst, u16 mode, int inc)
 {
@@ -621,17 +799,6 @@ void KD11CPUWriteW(KD11* kd11, QBUS* bus, u16 dst, u16 mode, u16 val)
 			WRITE(addr, val);
 			break;
 	}
-}
-
-#define	WRITE8(addr, val)	{ \
-	u16 aaddr = addr & 0xFFFE; \
-	u16 tmp = READ(aaddr); \
-	if(addr & 1) { \
-		tmp = (tmp & 0x00FF) | (val << 8); \
-	} else { \
-		tmp = (tmp & 0xFF00) | val; \
-	} \
-	WRITE(aaddr, tmp); \
 }
 
 void KD11CPUWriteB(KD11* kd11, QBUS* bus, u16 dst, u16 mode, u8 val)
@@ -941,6 +1108,7 @@ static s32 KD11FPUDIV(KD11* kd11, s32 ac, s32 src, unsigned int* trap)
 	s32 srcexp = F_EXP(src);
 
 	if(srcexp == 0) {
+		/* divide by zero */
 		TRCTrap(0244, TRC_TRAP);
 		TRAP(0244);
 		PSW_SET(PSW_V);
@@ -1484,7 +1652,7 @@ void KD11CPUStep(KD11* kd11, QBUS* bus)
 								| READ(kd11->r[insnrts->rn] + 6);
 							f2 = (READ(kd11->r[insnrts->rn]) << 16)
 								| READ(kd11->r[insnrts->rn] + 2);
-							if(bus->trap == 004) {
+							if(bus->nxm) {
 								trap = 1;
 							} else {
 								f3 = KD11FPUADD(kd11, f1, f2, &trap);
@@ -1498,7 +1666,7 @@ void KD11CPUStep(KD11* kd11, QBUS* bus)
 								PSW_CLR(PSW_V);
 								PSW_CLR(PSW_C);
 							}
-							if(bus->trap != 004) {
+							if(!bus->nxm) {
 								PSW_CLR(0140);
 							}
 							break;
@@ -1510,7 +1678,7 @@ void KD11CPUStep(KD11* kd11, QBUS* bus)
 							if(f2) {
 								f2 ^= FP_SIGN;
 							}
-							if(bus->trap == 004) {
+							if(bus->nxm) {
 								trap = 1;
 							} else {
 								f3 = KD11FPUADD(kd11, f1, f2, &trap);
@@ -1524,7 +1692,7 @@ void KD11CPUStep(KD11* kd11, QBUS* bus)
 								PSW_CLR(PSW_V);
 								PSW_CLR(PSW_C);
 							}
-							if(bus->trap != 004) {
+							if(!bus->nxm) {
 								PSW_CLR(0140);
 							}
 							break;
@@ -1533,7 +1701,7 @@ void KD11CPUStep(KD11* kd11, QBUS* bus)
 								| READ(kd11->r[insnrts->rn] + 6);
 							f2 = (READ(kd11->r[insnrts->rn]) << 16)
 								| READ(kd11->r[insnrts->rn] + 2);
-							if(bus->trap == 004) {
+							if(bus->nxm) {
 								trap = 1;
 							} else {
 								f3 = KD11FPUMUL(kd11, f1, f2, &trap);
@@ -1547,7 +1715,7 @@ void KD11CPUStep(KD11* kd11, QBUS* bus)
 								PSW_CLR(PSW_V);
 								PSW_CLR(PSW_C);
 							}
-							if(bus->trap != 004) {
+							if(!bus->nxm) {
 								PSW_CLR(0140);
 							}
 							break;
@@ -1556,8 +1724,8 @@ void KD11CPUStep(KD11* kd11, QBUS* bus)
 								| READ(kd11->r[insnrts->rn] + 6);
 							f2 = (READ(kd11->r[insnrts->rn]) << 16)
 								| READ(kd11->r[insnrts->rn] + 2);
-							if(f2 != 0) {
-								if(bus->trap == 004) {
+							if(f2 != 0 && !bus->nxm) {
+								if(bus->nxm) {
 									trap = 1;
 								} else {
 									f3 = KD11FPUDIV(kd11, f1, f2, &trap);
@@ -1571,7 +1739,7 @@ void KD11CPUStep(KD11* kd11, QBUS* bus)
 									PSW_CLR(PSW_V);
 									PSW_CLR(PSW_C);
 								}
-							} else {
+							} else if(!bus->nxm) {
 								PSW_SET(PSW_V);
 								PSW_SET(PSW_N);
 								PSW_SET(PSW_C);
@@ -1579,7 +1747,7 @@ void KD11CPUStep(KD11* kd11, QBUS* bus)
 								TRCTrap(0244, TRC_TRAP);
 								TRAP(0244);
 							}
-							if(bus->trap != 004) {
+							if(!bus->nxm) {
 								PSW_CLR(0140);
 							}
 							break;
@@ -1889,74 +2057,74 @@ void KD11CPUStep(KD11* kd11, QBUS* bus)
 	}
 }
 
+static int KD11HasPendingIRQ(KD11* kd11, QBUS* bus)
+{
+	return  (kd11->trap || bus->nxm || (bus->trap && !PSW_GET(PSW_PRIO)))
+		&& (kd11->state != STATE_HALT);
+}
+
 void KD11HandleTraps(KD11* kd11, QBUS* bus)
 {
 	u16 trap = kd11->trap;
-
-	if(!PSW_GET(PSW_PRIO)) {
-		kd11->trap = bus->trap;
-		bus->trap = 0;
-	} else if(bus->trap == 004) {
-		kd11->trap = bus->trap;
-		bus->trap = 0;
-	} else {
-		kd11->trap = 0;
-	}
 
 	/* ignore traps if in HALT mode */
 	if(kd11->state == STATE_HALT) {
 		return;
 	}
 
-	if(!trap) {
+	if(bus->nxm) {
+		bus->nxm = 0;
+		trap = 004;
+	} else if(!PSW_GET(PSW_PRIO)) {
+		/* internal traps have priority */
 		if(kd11->trap) {
 			trap = kd11->trap;
 			kd11->trap = 0;
 		} else {
-			return;
+			trap = bus->trap;
+			bus->trap = 0;
 		}
+	} else {
+		trap = kd11->trap;
+		kd11->trap = 0;
 	}
 
-	/* trap instructions have highest priority */
-	if((kd11->trap == 030 || kd11->trap == 034)
-			&& !(trap == 030 || trap == 034)) {
-		u16 tmp = kd11->trap;
-		kd11->trap = trap;
-		trap = tmp;
+	if(!trap) {
+		return;
 	}
 
 	TRCCPUEvent(TRC_CPU_TRAP, trap);
 
 	kd11->r[6] -= 2;
 	WRITE(kd11->r[6], kd11->psw);
-	if(bus->trap == 004 || bus->trap == 010) {
+	if(bus->nxm) {
 		TRCCPUEvent(TRC_CPU_DBLBUS, kd11->r[6]);
-		bus->trap = 0;
+		bus->nxm = 0;
 		kd11->state = STATE_HALT;
 		return;
 	}
 
 	kd11->r[6] -= 2;
 	WRITE(kd11->r[6], kd11->r[7]);
-	if(bus->trap == 004 || bus->trap == 010) {
+	if(bus->nxm) {
 		TRCCPUEvent(TRC_CPU_DBLBUS, kd11->r[6]);
-		bus->trap = 0;
+		bus->nxm = 0;
 		kd11->state = STATE_HALT;
 		return;
 	}
 
 	kd11->r[7] = READ(trap);
-	if(bus->trap == 004 || bus->trap == 010) {
+	if(bus->nxm) {
 		TRCCPUEvent(TRC_CPU_DBLBUS, trap);
-		bus->trap = 0;
+		bus->nxm = 0;
 		kd11->state = STATE_HALT;
 		return;
 	}
 
 	kd11->psw = READ(trap + 2);
-	if(bus->trap == 004 || bus->trap == 010) {
+	if(bus->nxm) {
 		TRCCPUEvent(TRC_CPU_DBLBUS, trap + 2);
-		bus->trap = 0;
+		bus->nxm = 0;
 		kd11->state = STATE_HALT;
 		return;
 	}
@@ -1975,6 +2143,14 @@ void KD11Step(KD11* kd11, QBUS* bus)
 			KD11ODTStep(kd11, bus);
 			break;
 		case STATE_RUN:
+			if(KD11HasPendingIRQ(kd11, bus)) {
+				KD11HandleTraps(kd11, bus);
+				if(kd11->state == STATE_HALT) {
+					kd11->odt.state = ODT_STATE_INIT;
+				}
+				return;
+			}
+
 			IFTRC() {
 				TRCSETIGNBUS();
 				u16 bus_trap = bus->trap;
@@ -1994,10 +2170,6 @@ void KD11Step(KD11* kd11, QBUS* bus)
 			} else if(!kd11->trap && (kd11->psw & PSW_T)) {
 				TRCTrap(014, TRC_TRAP_T);
 				TRAP(014);
-			}
-			KD11HandleTraps(kd11, bus);
-			if(kd11->state == STATE_HALT) {
-				kd11->odt.state = ODT_STATE_INIT;
 			}
 			break;
 		case STATE_WAIT:

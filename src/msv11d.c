@@ -18,6 +18,18 @@ void MSV11DWrite(void* self, u16 address, u16 value)
 	*mem = value;
 }
 
+u8 MSV11DRead8(void* self, u16 address)
+{
+	MSV11D* msv = (MSV11D*) self;
+	return msv->data[address];
+}
+
+void MSV11DWrite8(void* self, u16 address, u8 value)
+{
+	MSV11D* msv = (MSV11D*) self;
+	msv->data[address] = value;
+}
+
 u8 MSV11DResponsible(void* self, u16 address)
 {
 	return address < MSV11D_SIZE;
@@ -33,6 +45,8 @@ void MSV11DInit(MSV11D* msv)
 	msv->module.self = (void*) msv;
 	msv->module.read = MSV11DRead;
 	msv->module.write = MSV11DWrite;
+	msv->module.read8 = MSV11DRead8;
+	msv->module.write8 = MSV11DWrite8;
 	msv->module.responsible = MSV11DResponsible;
 	msv->module.reset = MSV11DReset;
 
