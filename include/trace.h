@@ -25,7 +25,8 @@
 #define	TRC_CPU_RUN		3
 #define	TRC_CPU_DBLBUS		4
 #define	TRC_CPU_ODT_P		5
-#define	TRC_CPU_ODT_G		5
+#define	TRC_CPU_ODT_G		6
+#define	TRC_CPU_ODT_L		7
 
 #define	TRC_TRAP		0
 #define	TRC_TRAP_ILL		1
@@ -37,6 +38,10 @@
 #define	TRC_BUS_RDFAIL		2
 #define	TRC_BUS_WRFAIL		3
 #define	TRC_BUS_RESET		4
+#define	TRC_BUS_RD8		5
+#define	TRC_BUS_WR8		6
+#define	TRC_BUS_RD8FAIL		7
+#define	TRC_BUS_WR8FAIL		8
 
 #define	TRC_IRQ_OK		0
 #define	TRC_IRQ_FAIL		1

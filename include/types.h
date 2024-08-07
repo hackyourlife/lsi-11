@@ -12,4 +12,8 @@
 #define	u64	uint64_t
 #define	s64	int64_t
 
+#define	BOOL	int
+#define	TRUE	1
+#define	FALSE	0
+
 #endif
