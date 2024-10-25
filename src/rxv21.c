@@ -586,6 +586,7 @@ void RXV21Reset(void* self)
 
 void RXV21Init(RXV21* rx)
 {
+	rx->module.irq = 0;
 	rx->module.self = (void*) rx;
 	rx->module.read = RXV21Read;
 	rx->module.write = RXV21Write;
@@ -604,6 +605,15 @@ void RXV21Init(RXV21* rx)
 	/* clear DELETED DATA markers */
 	memset(del_marks_unit0, 0, sizeof(del_marks_unit0));
 	memset(del_marks_unit1, 0, sizeof(del_marks_unit1));
+
+	/* clear state and errors */
+	rx->state = 0;
+	rx->error = 0;
+	rx->nxm = 0;
+
+	/* set data to NULL */
+	rx->data0 = NULL;
+	rx->data1 = NULL;
 
 	/* RXV21Reset(rx); */
 }
