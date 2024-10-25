@@ -163,13 +163,15 @@ void RXV21WriteSector(RXV21* rx, BOOL deleted)
 	rx->rx2sa &= 0037;
 	rx->rx2ta &= 0177;
 
-	offset = (rx->rx2sa - 1) * 256 + rx->rx2ta * (26 * 256);
+	u32 secsz = (rx->rx2cs & RX_DEN) ? 128 : 64;
+	offset = (rx->rx2sa - 1) * secsz * sizeof(u16) + rx->rx2ta * (26 * secsz * sizeof(u16));
 
 	TRCRXV21CMDCommit((rx->rx2cs & RX_FUNCTION_MASK) >> 1, rx->rx2cs);
 	TRCRXV21Disk(TRC_RXV21_WRITE, (rx->rx2cs & RX_UNIT_SEL) ? 1 : 0,
 			(rx->rx2cs & RX_DEN) ? 1 : 0, rx->rx2sa, rx->rx2ta);
 
-	if(!(rx->rx2cs & RX_DEN)) {
+	u8 den = (rx->rx2cs & RX_UNIT_SEL) ? rx->den1 : rx->den0;
+	if(!!(rx->rx2cs & RX_DEN) != den) {
 		TRCRXV21Error(TRC_RXV21_DEN_ERR, 0);
 		rx->error = 0240; /* Density Error */
 		rx->rx2cs |= RX_ERROR;
@@ -191,8 +193,8 @@ void RXV21WriteSector(RXV21* rx, BOOL deleted)
 		u16 i;
 		u8* data = (rx->rx2cs & RX_UNIT_SEL) ? rx->data1 : rx->data0;
 		u16* sec = (u16*) &data[offset];
-		memcpy(&data[offset], rx->buffer, 256);
-		for(i = 0; i < 128; i++) {
+		memcpy(&data[offset], rx->buffer, secsz * sizeof(u16));
+		for(i = 0; i < secsz; i++) {
 			sec[i] = U16L(sec[i]);
 		}
 	}
@@ -200,7 +202,7 @@ void RXV21WriteSector(RXV21* rx, BOOL deleted)
 	/* update DELETED DATA marker */
 	u32* marks = (rx->rx2cs & RX_UNIT_SEL) ? del_marks_unit1 : \
 		     del_marks_unit0;
-	u32 index = offset / 256;
+	u32 index = offset / (secsz * sizeof(u16));
 	u32 word = index / 32;
 	u32 bit = 1L << (index % 32);
 	if(deleted) {
@@ -219,13 +221,15 @@ void RXV21ReadSector(RXV21* rx)
 	rx->rx2sa &= 0037;
 	rx->rx2ta &= 0177;
 
-	offset = (rx->rx2sa - 1) * 256 + rx->rx2ta * (26 * 256);
+	u32 secsz = (rx->rx2cs & RX_DEN) ? 128 : 64;
+	offset = (rx->rx2sa - 1) * secsz * sizeof(u16) + rx->rx2ta * (26 * secsz * sizeof(u16));
 
 	TRCRXV21CMDCommit((rx->rx2cs & RX_FUNCTION_MASK) >> 1, rx->rx2cs);
 	TRCRXV21Disk(TRC_RXV21_READ, (rx->rx2cs & RX_UNIT_SEL) ? 1 : 0,
 			(rx->rx2cs & RX_DEN) ? 1 : 0, rx->rx2sa, rx->rx2ta);
 
-	if(!(rx->rx2cs & RX_DEN)) {
+	u8 den = (rx->rx2cs & RX_UNIT_SEL) ? rx->den1 : rx->den0;
+	if(!!(rx->rx2cs & RX_DEN) != den) {
 		TRCRXV21Error(TRC_RXV21_DEN_ERR, 0);
 		rx->error = 0240; /* Density Error */
 		rx->rx2cs |= RX_ERROR;
@@ -246,8 +250,8 @@ void RXV21ReadSector(RXV21* rx)
 	} else {
 		u16 i;
 		u8* data = (rx->rx2cs & RX_UNIT_SEL) ? rx->data1 : rx->data0;
-		memcpy(rx->buffer, &data[offset], 256);
-		for(i = 0; i < 128; i++) {
+		memcpy(rx->buffer, &data[offset], secsz * sizeof(u16));
+		for(i = 0; i < secsz; i++) {
 			rx->buffer[i] = U16L(rx->buffer[i]);
 		}
 	}
@@ -255,7 +259,7 @@ void RXV21ReadSector(RXV21* rx)
 	/* read DELETED DATA marker */
 	u32* marks = (rx->rx2cs & RX_UNIT_SEL) ? del_marks_unit1 : \
 		     del_marks_unit0;
-	u32 index = offset / 256;
+	u32 index = offset / (secsz * sizeof(u16));
 	u32 word = index / 32;
 	u32 bit = 1L << (index % 32);
 	if(marks[word] & bit) {
@@ -288,6 +292,13 @@ void RXV21SetMediaDensity(RXV21* rx)
 
 	void* data = (rx->rx2cs & RX_UNIT_SEL) ? rx->data1 : rx->data0;
 	memset(data, 0, 512512);
+
+	u8 den = !!(rx->rx2cs & RX_DEN);
+	if(rx->rx2cs & RX_UNIT_SEL) {
+		rx->den1 = den;
+	} else {
+		rx->den0 = den;
+	}
 
 	RXV21Done(rx);
 }
@@ -567,8 +578,10 @@ void RXV21Reset(void* self)
 	/* read sector 1 / track 1 of drive 0 into buffer */
 	rx->rx2sa = 1;
 	rx->rx2ta = 1;
-	u32 offset = (rx->rx2sa - 1) * 256 + rx->rx2ta * (26 * 256);
-	memcpy(rx->buffer, rx->data0 + offset, 256);
+
+	u32 secsz = rx->den0 ? 128 : 64;
+	u32 offset = (rx->rx2sa - 1) * secsz * sizeof(u16) + rx->rx2ta * (26 * secsz * sizeof(u16));
+	memcpy(rx->buffer, rx->data0 + offset, secsz * sizeof(u16));
 }
 
 void RXV21Init(RXV21* rx)
@@ -585,6 +598,9 @@ void RXV21Init(RXV21* rx)
 	rx->base = 0177170;
 	rx->vector = 0264;
 
+	rx->den0 = 1;
+	rx->den1 = 1;
+
 	/* clear DELETED DATA markers */
 	memset(del_marks_unit0, 0, sizeof(del_marks_unit0));
 	memset(del_marks_unit1, 0, sizeof(del_marks_unit1));
@@ -597,14 +613,16 @@ void RXV21Destroy(RXV21* rx)
 	/* nothing */
 }
 
-void RXV21SetData0(RXV21* rx, u8* data)
+void RXV21SetData0(RXV21* rx, u8* data, int den)
 {
 	rx->data0 = data;
+	rx->den0 = !!den;
 }
 
-void RXV21SetData1(RXV21* rx, u8* data)
+void RXV21SetData1(RXV21* rx, u8* data, int den)
 {
 	rx->data1 = data;
+	rx->den1 = !!den;
 }
 
 void RXV21Step(RXV21* rx)

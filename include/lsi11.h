@@ -173,6 +173,9 @@ typedef struct {
 
 	u16	nxm;
 
+	u8	den0;
+	u8	den1;
+
 	u16	buffer[128];
 	u8*	data0;
 	u8*	data1;
@@ -221,8 +224,8 @@ void BDV11SetSwitch(BDV11* bdv, u16 sw);
 
 void RXV21Init(RXV21* rx);
 void RXV21Destroy(RXV21* rx);
-void RXV21SetData0(RXV21* rx, u8* data);
-void RXV21SetData1(RXV21* rx, u8* data);
+void RXV21SetData0(RXV21* rx, u8* data, int den);
+void RXV21SetData1(RXV21* rx, u8* data, int den);
 void RXV21Step(RXV21* rx);
 
 void RLV12Init(RLV12* rl);

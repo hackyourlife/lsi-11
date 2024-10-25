@@ -6,6 +6,7 @@
 #include <time.h>
 #include <sys/time.h>
 #include <sys/types.h>
+#include <sys/stat.h>
 #include <unistd.h>
 #include <termios.h>
 #include <signal.h>
@@ -157,6 +158,8 @@ int main(int argc, char** argv)
 	FILE* floppy_file;
 	u8* floppy0;
 	u8* floppy1;
+	int den0 = 1;
+	int den1 = 1;
 	u8* disk0 = NULL;
 	u8* disk1 = NULL;
 	u8* disk2 = NULL;
@@ -187,6 +190,7 @@ int main(int argc, char** argv)
 	int dump_disk3 = 0;
 
 	int exit_on_halt = 0;
+	int no_sigint = 0;
 
 	int notty = 0;
 	const char* console_input = NULL;
@@ -252,6 +256,8 @@ int main(int argc, char** argv)
 			dialog = 0;
 		} else if(!strcmp("-n", *argv)) {
 			tests = 0;
+		} else if(!strcmp("-i", *argv)) {
+			no_sigint = 1;
 		} else if(!strcmp("-t", *argv) && argc > 1) {
 			trace_file = argv[1];
 			argc--;
@@ -275,6 +281,7 @@ int main(int argc, char** argv)
 					"  -sd             Store updated RL02 disk in file\n"
 					"  -q              Skip BDV11 console test\n"
 					"  -n              Skip BDV11 CPU and memory tests\n"
+					"  -i              Ignore SIGINT, only CTRL-E exits the emulator\n"
 					"  -t file.trc     Record execution trace to file.trc\n"
 					"  -nz             Don't use delta compression for execution trace\n"
 					"\n"
@@ -313,33 +320,63 @@ int main(int argc, char** argv)
 	}
 
 	if(floppy_filename0) {
+		struct stat buf;
+		if(stat(floppy_filename0, &buf) == -1) {
+			printf("Error: cannot stat file %s: %s\n", floppy_filename0, strerror(errno));
+			free(floppy0);
+			free(floppy1);
+			return 1;
+		}
 		floppy_file = fopen(floppy_filename0, "rb");
 		if(!floppy_file) {
 			printf("Error: cannot open file %s\n", floppy_filename0);
 			free(floppy0);
+			free(floppy1);
 			return 1;
 		}
-		fread(floppy0, 77 * 26 * 256, 1, floppy_file);
+		int is_rx01 = buf.st_size == 77 * 26 * 128;
+		int is_rx02 = buf.st_size == 77 * 26 * 256;
+		den0 = is_rx02;
+		if(!is_rx01 && !is_rx02) {
+			printf("Error: %s is not a RX01 or RX02 disk image\n", floppy_filename0);
+		} else {
+			fread(floppy0, buf.st_size, 1, floppy_file);
+		}
 		fclose(floppy_file);
 	} else {
 		memset(floppy0, 0, 77 * 26 * 256);
 	}
 
 	if(floppy_filename1) {
+		struct stat buf;
+		if(stat(floppy_filename1, &buf) == -1) {
+			printf("Error: cannot stat file %s: %s\n", floppy_filename1, strerror(errno));
+			free(floppy0);
+			free(floppy1);
+			return 1;
+		}
 		floppy_file = fopen(floppy_filename1, "rb");
 		if(!floppy_file) {
 			printf("Error: cannot open file %s\n", floppy_filename1);
 			free(floppy0);
+			free(floppy1);
 			return 1;
 		}
-		fread(floppy1, 77 * 26 * 256, 1, floppy_file);
+		int is_rx01 = buf.st_size == 77 * 26 * 128;
+		int is_rx02 = buf.st_size == 77 * 26 * 256;
+		den1 = is_rx02;
+		if(!is_rx01 && !is_rx02) {
+			printf("Error: %s is not a RX01 or RX02 disk image\n", floppy_filename1);
+		} else {
+			fread(floppy1, buf.st_size, 1, floppy_file);
+		}
 		fclose(floppy_file);
 	} else {
 		memset(floppy1, 0, 77 * 26 * 256);
 	}
 
-	RXV21SetData0(&rxv21, floppy0);
-	RXV21SetData1(&rxv21, floppy1);
+	RXV21SetData0(&rxv21, floppy0, den0);
+	RXV21SetData1(&rxv21, floppy1, den1);
 
 	if(disk_filename0) {
 		disk0 = (u8*) malloc(DISK_SIZE);
@@ -503,6 +540,9 @@ int main(int argc, char** argv)
 		tio.c_oflag &= ~OPOST;
 		tio.c_cflag |= CS8;
 		tio.c_lflag &= ~(ECHO | ICANON | IEXTEN);
+		if(no_sigint) {
+			tio.c_lflag &= ~ISIG;
+		}
 		tcsetattr(0, TCSANOW, &tio);
 	}
 #endif
@@ -531,6 +571,10 @@ int main(int argc, char** argv)
 		if(select(1, &fds, NULL, NULL, &tv) == 1) {
 			char c;
 			read(0, &c, 1);
+
+			if(no_sigint && c == 5) {
+				running = 0;
+			}
 #ifdef DEBUG
 			if(c == '\n')
 				c = '\r';
