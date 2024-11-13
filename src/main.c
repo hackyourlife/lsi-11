@@ -340,7 +340,9 @@ int main(int argc, char** argv)
 		if(!is_rx01 && !is_rx02) {
 			printf("Error: %s is not a RX01 or RX02 disk image\n", floppy_filename0);
 		} else {
-			fread(floppy0, buf.st_size, 1, floppy_file);
+			if(fread(floppy0, buf.st_size, 1, floppy_file) != 1) {
+				printf("Error: cannot read file %s\n", floppy_filename0);
+			}
 		}
 		fclose(floppy_file);
 	} else {
@@ -368,7 +370,9 @@ int main(int argc, char** argv)
 		if(!is_rx01 && !is_rx02) {
 			printf("Error: %s is not a RX01 or RX02 disk image\n", floppy_filename1);
 		} else {
-			fread(floppy1, buf.st_size, 1, floppy_file);
+			if(fread(floppy1, buf.st_size, 1, floppy_file) != 1) {
+				printf("Error: cannot read file %s\n", floppy_filename1);
+			}
 		}
 		fclose(floppy_file);
 	} else {
@@ -386,7 +390,9 @@ int main(int argc, char** argv)
 		if(!file) {
 			printf("Error: cannot open file %s: %s\n", disk_filename0, strerror(errno));
 		} else {
-			fread(disk0, DISK_SIZE, 1, file);
+			if(fread(disk0, DISK_SIZE, 1, file) != 1) {
+				printf("Error: cannot read file %s\n", disk_filename0);
+			}
 			fclose(file);
 		}
 
@@ -401,7 +407,9 @@ int main(int argc, char** argv)
 		if(!file) {
 			printf("Error: cannot open file %s: %s\n", disk_filename1, strerror(errno));
 		} else {
-			fread(disk1, DISK_SIZE, 1, file);
+			if(fread(disk1, DISK_SIZE, 1, file) != 1) {
+				printf("Error: cannot read file %s\n", disk_filename1);
+			}
 			fclose(file);
 		}
 
@@ -416,7 +424,9 @@ int main(int argc, char** argv)
 		if(!file) {
 			printf("Error: cannot open file %s: %s\n", disk_filename2, strerror(errno));
 		} else {
-			fread(disk2, DISK_SIZE, 1, file);
+			if(fread(disk2, DISK_SIZE, 1, file) != 1) {
+				printf("Error: cannot read file %s\n", disk_filename2);
+			}
 			fclose(file);
 		}
 
@@ -431,7 +441,9 @@ int main(int argc, char** argv)
 		if(!file) {
 			printf("Error: cannot open file %s: %s\n", disk_filename3, strerror(errno));
 		} else {
-			fread(disk3, DISK_SIZE, 1, file);
+			if(fread(disk3, DISK_SIZE, 1, file) != 1) {
+				printf("Error: cannot read file %s\n", disk_filename3);
+			}
 			fclose(file);
 		}
 
@@ -502,13 +514,26 @@ int main(int argc, char** argv)
 				free(floppy1);
 				return 1;
 			}
-			fread(&len, 2, 1, f);
-			fread(&addr, 2, 1, f);
+			if(fread(&len, 2, 1, f) != 1) {
+				printf("Error: failed to read 2 bytes\n");
+				break;
+			}
+			if(fread(&addr, 2, 1, f) != 1) {
+				printf("Error: failed to read 2 bytes\n");
+				break;
+			}
 			bytes += len;
 			printf("%06o: %d bytes\n", addr, len - 6);
-			fread(&msv11.data[addr], len - 6, 1, f);
+			/* only really read data if len - 6 > 0 */
+			if(len - 6 > 0 && fread(&msv11.data[addr], len - 6, 1, f) != 1) {
+				printf("Error: failed to read %u bytes\n", len - 6);
+				break;
+			}
 			TRCMemoryDump(&msv11.data[addr], addr, len - 6);
-			fread(&cksum, 1, 1, f);
+			if(fread(&cksum, 1, 1, f) != 1) {
+				printf("Error: failed to read 1 byte\n");
+				break;
+			}
 			if(len == 6) {
 				if((addr & 1) == 0) {
 					lsi.cpu.r[7] = addr;
@@ -570,7 +595,9 @@ int main(int argc, char** argv)
 
 		if(select(1, &fds, NULL, NULL, &tv) == 1) {
 			char c;
-			read(0, &c, 1);
+			if(read(0, &c, 1) != 1) {
+				fprintf(stderr, "Error: failed to receive 1 byte\n");
+			}
 
 			if(no_sigint && c == 5) {
 				running = 0;
