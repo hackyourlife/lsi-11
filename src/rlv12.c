@@ -183,11 +183,15 @@ static inline void RLV12ReadSector(RLV12* rl, u16 ca, u16 hs, u16 sa, u16 unit)
 			break;
 	}
 
+	/* suppress warning because DMA buffer is 2x sector size */
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wmemset-elt-size"
 	if(disk) {
 		memcpy(rl->dma, &disk[offset], 128 * sizeof(u16));
 	} else {
 		memset(rl->dma, 0, 128 * sizeof(u16));
 	}
+#pragma GCC diagnostic pop
 }
 
 static inline void RLV12WriteSector(RLV12* rl, u16 ca, u16 hs, u16 sa, u16 unit)
@@ -463,7 +467,11 @@ void RLV12WriteData(RLV12* rl)
 		return;
 	}
 
+	/* suppress warning because DMA buffer is 2x sector size */
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wmemset-elt-size"
 	memset(rl->dma, 0, 128 * sizeof(u16));
+#pragma GCC diagnostic pop
 	while(wc++) {
 		*(data++) = READ(rl->bar);
 		rl->bar += 2;
@@ -493,7 +501,12 @@ void RLV12WriteData(RLV12* rl)
 				return;
 			}
 
+			/* suppress warning because DMA buffer is 2x sector
+			 * size */
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wmemset-elt-size"
 			memset(rl->dma, 0, 128 * sizeof(u16));
+#pragma GCC diagnostic pop
 			data = rl->dma;
 		}
 	}
