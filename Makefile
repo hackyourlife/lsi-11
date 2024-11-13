@@ -30,11 +30,11 @@ ASANFLG		:=
 endif
 
 
-CFLAGS		:=	$(OPT) -Wall -std=c99 \
+CFLAGS		+=	$(OPT) -Wall -std=c99 \
 			-ffunction-sections -fdata-sections \
 			$(INCLUDE) -DUNIX $(ASANFLG)
 
-LDFLAGS		:=	-Wl,-x -Wl,--gc-sections $(OPT) $(ASANFLG)
+LDFLAGS		+=	-Wl,-x -Wl,--gc-sections $(OPT) $(ASANFLG)
 
 CFILES		:=	$(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.c)))
 
