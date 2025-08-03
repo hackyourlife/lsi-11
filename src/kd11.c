@@ -140,6 +140,11 @@ void KD11Init(KD11* kd11)
 	memset(kd11, 0, sizeof(KD11));
 }
 
+void KD11SetCoredumpHandler(KD11* kd11, void (*coredump)(KD11*, QBUS*))
+{
+	kd11->coredump = coredump;
+}
+
 void KD11Reset(KD11* kd11)
 {
 	kd11->r[7] = 0173000;
@@ -2073,6 +2078,10 @@ void KD11HandleTraps(KD11* kd11, QBUS* bus)
 	}
 
 	if(bus->nxm) {
+		if(kd11->coredump) {
+			kd11->coredump(kd11, bus);
+		}
+
 		bus->nxm = 0;
 		trap = 004;
 	} else if(!PSW_GET(PSW_PRIO)) {
@@ -2180,6 +2189,7 @@ void KD11Step(KD11* kd11, QBUS* bus)
 
 void KD11Trap(KD11* kd11, int n)
 {
+	/* TODO: is this ok? Can this miss ACK'd traps? */
 	if(kd11->trap == 0 || kd11->trap > n) {
 		kd11->trap = n;
 	}

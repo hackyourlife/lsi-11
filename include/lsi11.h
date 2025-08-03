@@ -59,25 +59,6 @@
 #define	BDV11_2780	_B(3)
 #define	BDV11_PROG_ROM	_B(4)
 
-typedef struct {
-	u16	addr;
-	u16	val;
-	u8	input;
-	u8	state;
-	u8	next;
-	u8	buf[16];
-	u8	buf_r;
-	u8	buf_sz;
-} KD11ODT;
-
-typedef struct {
-	u16	r[8];
-	u16	psw;
-	KD11ODT	odt;
-	u8	state;
-	u16	trap;
-} KD11;
-
 typedef struct QBUS QBUS;
 struct QBUS {
 	void*	user;
@@ -108,6 +89,28 @@ typedef struct {
 	void	(*reset)(void* self);
 	int	irq;
 } QBUSMod;
+
+typedef struct {
+	u16	addr;
+	u16	val;
+	u8	input;
+	u8	state;
+	u8	next;
+	u8	buf[16];
+	u8	buf_r;
+	u8	buf_sz;
+} KD11ODT;
+
+typedef struct KD11 KD11;
+struct KD11 {
+	u16	r[8];
+	u16	psw;
+	KD11ODT	odt;
+	u8	state;
+	u16	trap;
+	void	(*coredump)(KD11* self, QBUS* bus);
+};
+
 
 typedef struct {
 	KD11	cpu;
@@ -240,6 +243,7 @@ void KD11Init(KD11* kd11);
 void KD11Reset(KD11* kd11);
 void KD11Step(KD11* kd11, QBUS* bus);
 void KD11Trap(KD11* kd11, int n);
+void KD11SetCoredumpHandler(KD11* kd11, void (*coredump)(KD11*, QBUS*));
 
 /* LSI-11 subroutines */
 void LSI11Init(LSI11* lsi);

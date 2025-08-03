@@ -139,6 +139,44 @@ void init_rl02(u8* disk)
 #define	BOOT_RX02	1
 #define	BOOT_RL02	2
 
+static const char* coredump_filename = NULL;
+
+static u8* ram = NULL;
+void write_coredump(KD11* kd11, QBUS* bus)
+{
+	(void) bus;
+
+	if(!coredump_filename) {
+		return;
+	}
+
+	/* TAI: we never want to miss a coredump even if there is a
+	 * leap second */
+	struct timespec now;
+	clock_gettime(CLOCK_TAI, &now);
+
+	char suffix[64];
+	sprintf(suffix, ".%lu.%lu.core", now.tv_sec, now.tv_nsec);
+	char* filename = (char*) malloc(strlen(coredump_filename) + strlen(suffix) + 1);
+	sprintf(filename, "%s%s", coredump_filename, suffix);
+
+	FILE* file = fopen(filename, "wb");
+	int err = errno;
+	free(filename);
+
+	if(!file) {
+		fprintf(stderr, "Failed to open coredump file: %s\n",
+				strerror(err));
+		return;
+	}
+
+	fwrite(ram, MSV11D_SIZE, 1, file);
+	fwrite(kd11->r, sizeof(u16), 8, file);
+	fwrite(&kd11->psw, sizeof(u16), 1, file);
+
+	fclose(file);
+}
+
 int main(int argc, char** argv)
 {
 	LSI11 lsi;
@@ -258,6 +296,10 @@ int main(int argc, char** argv)
 			tests = 0;
 		} else if(!strcmp("-i", *argv)) {
 			no_sigint = 1;
+		} else if(!strcmp("-cd", *argv) && argc > 1) {
+			coredump_filename = argv[1];
+			argc--;
+			argv++;
 		} else if(!strcmp("-t", *argv) && argc > 1) {
 			trace_file = argv[1];
 			argc--;
@@ -282,6 +324,7 @@ int main(int argc, char** argv)
 					"  -q              Skip BDV11 console test\n"
 					"  -n              Skip BDV11 CPU and memory tests\n"
 					"  -i              Ignore SIGINT, only CTRL-E exits the emulator\n"
+					"  -cd file        Create coredump file on bus timeout\n"
 					"  -t file.trc     Record execution trace to file.trc\n"
 					"  -nz             Don't use delta compression for execution trace\n"
 					"\n"
@@ -298,6 +341,10 @@ int main(int argc, char** argv)
 	BDV11Init(&bdv11);
 	RXV21Init(&rxv21);
 	RLV12Init(&rlv12);
+
+	if(coredump_filename) {
+		ram = msv11.data;
+	}
 
 	switch(bootdev) {
 		default:
@@ -467,6 +514,10 @@ int main(int argc, char** argv)
 	LSI11InstallModule(&lsi, 4, &dlv11.module);
 	LSI11InstallModule(&lsi, 5, &bdv11.module);
 	LSI11Reset(&lsi);
+
+	if(coredump_filename) {
+		KD11SetCoredumpHandler(&lsi.cpu, write_coredump);
+	}
 
 	if(bootstrap) {
 		LSI11ConsoleSendString(&dlv11, odt_input);
