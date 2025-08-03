@@ -76,6 +76,12 @@ Skip BDV11 CPU and memory tests.
 \fB\-i\fR
 Ignore SIGINT, only \fBCTRL-E\fR exits the emulator.
 .TP
+\fB\-cd\fR \fIdump\fR
+Create core dump file \fIdump\fR\fB.timestamp_tai.core\fR whenever the
+CPU encounters a bus timeout. The \fBtimestamp_tai\fR is the UNIX
+timestamp (TAI, not UTC) when the bus timeout occured. TAI is used to
+avoid issues with leap seconds.
+.TP
 \fB\-t\fR \fIfile.trc\fR
 Record execution trace to \fIfile.trc\fR in machine readable format.
 .TP
