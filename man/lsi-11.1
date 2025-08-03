@@ -1,0 +1,196 @@
+.\" vim:set tw=72 noet:
+.\" Bulleted paragraph
+.de bP
+.ie n  .IP \(bu 4
+.el    .IP \(bu 2
+..
+.
+.TH LSI-11 "1" "August 2025" "unknown" "User Commands"
+.
+.SH NAME
+lsi-11 \- DEC PDP-11/03-L minicomputer emulator
+.
+.SH SYNOPSIS
+.B lsi-11
+[\fI\,OPTION\/\fR]... [\fI\,FILE\/\fR]
+.
+.SH DESCRIPTION
+.P
+The \fBlsi-11\fR program is a full system emulator which emulates the
+DEC PDP-11/03-L (\(lqLSI-11\(rq) minicomputer with reasonable accuracy.
+This emulator includes the bootstrap and diagnostic ROM code from a real
+PDP-11/03-L.
+.TP
+\fB\-\-help\fR
+Display a short help message and exit.
+.TP
+\fB\-h\fR
+Start the emulator in CPU HALT mode.
+.TP
+\fB\-x\fR
+Exit the emulator on HALT.
+.TP
+\fB\-b\fR
+Enter RX02 double density bootstrap program on the system console.
+.TP
+\fB\-l\fR \fIfile.bin\fR
+Load \fIfile.bin\fR in absolute loader format into core.
+.TP
+\fB\-f\fR \fIfile.rx2\fR
+Load RX02 floppy image from \fIfile.rx2\fR into RX02 unit 0.
+.TP
+\fB\-f1\fR \fIfile.rx2\fR
+Load RX02 floppy image from \fIfile.rx2\fR into RX02 unit 1.
+.TP
+\fB\-d\fR \fIfile.rl2\fR
+Load RL02 disk image from \fIfile.rl2\fR into RL02 unit 0.
+.TP
+\fB\-d1\fR \fIfile.rl2\fR
+Load RL02 disk image from \fIfile.rl2\fR into RL02 unit 1.
+.TP
+\fB\-d2\fR \fIfile.rl2\fR
+Load RL02 disk image from \fIfile.rl2\fR into RL02 unit 2.
+.TP
+\fB\-d3\fR \fIfile.rl2\fR
+Load RL02 disk image from \fIfile.rl2\fR into RL02 unit 3.
+.TP
+\fB\-sd\fR
+Store updated RL02 disk from RL02 unit 0 back to file on emulator exit.
+.TP
+\fB\-sd1\fR
+Store updated RL02 disk from RL02 unit 1 back to file on emulator exit.
+.TP
+\fB\-sd2\fR
+Store updated RL02 disk from RL02 unit 2 back to file on emulator exit.
+.TP
+\fB\-sd3\fR
+Store updated RL02 disk from RL02 unit 3 back to file on emulator exit.
+.TP
+\fB\-q\fR
+Skip BDV11 console test. This also implies booting from the default boot
+device.
+.TP
+\fB\-n\fR
+Skip BDV11 CPU and memory tests.
+.TP
+\fB\-i\fR
+Ignore SIGINT, only \fBCTRL-E\fR exits the emulator.
+.TP
+\fB\-t\fR \fIfile.trc\fR
+Record execution trace to \fIfile.trc\fR in machine readable format.
+.TP
+\fB\-nz\fR
+Don't use delta compression for execution trace.
+.
+.PP
+The optional last argument \fIFILE\fR is equivalent to \fB\-l\fR
+\fIFILE\fR
+.
+.PP
+If no program file in absolute loader format is specified, the bootstrap
+and diagnostic ROM code from the BDV11 module is executed.
+.
+.PP
+The default boot device configured for the bootstrap ROM depends on the
+arguments given.
+.bP
+If a hard disk image for RL02 unit 0 is provided, the
+RL02 drive is selected as boot device.
+.bP
+If a floppy disk image for RX02 unit 0 is provided, the RX02 drive is
+selected as boot device.
+.bP
+If disk images for both RX02 unit 0 and RL02 unit 0 are provided, the
+last option on the command line selects the boot device.
+.
+.SH "FEATURES"
+The emulated system has 6 modules installed:
+.bP
+KD11-NA (M7270) CPU
+.bP
+MSV11 (M8044) 32KW RAM
+.bP
+RXV21 (M8029) RX02 floppy disk controller
+.bP
+RLV12 (M8061) RL01/RL02 hard disk controller
+.bP
+DLV11-J (M8043) 4x Serial line interface
+.bP
+BDV11 bus terminator, bootstrap, and diagnostic ROM
+.
+.PP
+This emulator passes (at least) the basic instruction test (VKAAC0), EIS
+instruction test (VKABB0), FIS instruction test (VKACC1), traps test
+(VKADC0), and 4K system exerciser (VKAHA1). It can boot RT-11SB V05.07,
+RT-11FB V05.07, and XXDP V2.6.
+.
+.
+.SH "HOW TO BOOT A PDP-11/03"
+When the system boots, the boot ROM asks \fBSTART?\fR. You can answer
+with \fBY\fR to boot from the default boot device, or enter a device
+name. Since this machine only has an RX02 floppy disk drive and an RL02
+hard disk drive, you can enter:
+.TP
+\fBDY0\fR
+RX02 floppy disk unit 0
+.TP
+\fBDY1\fR
+RX02 floppy disk unit 1
+.TP
+\fBDL0\fR
+RL02 hard disk unit 0
+.TP
+\fBDL1\fR
+RL02 hard disk unit 1
+.TP
+\fBDL2\fR
+RL02 hard disk unit 2
+.TP
+\fBDL3\fR
+RL02 hard disk unit 3
+.
+.
+.SH "PDP-11/03 ODT"
+The LSI-11 has built-in microcode in the CPU which implements a minimal
+debugger called \(lqODT\(rq (for \(lqOctal Debugging Technique\(rq).
+This debugger is invoked whenever the CPU HALTs, which means whenever
+you send a \fBBREAK\fR via the terminal or when the CPU encounters a
+\fBHALT\fR instruction. Unfortunately, you cannot send a \fBBREAK\fR to
+a terminal program on Linux. Once ODT is entered, the CPU prints the
+current value of the \fBPC\fR register followed by a newline and
+\fB@\fR. You can enter various commands at this prompt:
+.
+.bP
+Query registers values via \fBR0/\fR. The CPU prints the current
+contents of the register. If you enter a number here, this value is
+stored in the register. If you only press \fBENTER\fR, nothing is
+changed. Valid registers are \fBR0\fR - \fBR7\fR as well as \fBRS\fR
+for the status word.
+.bP
+Query memory contents via \fI177522\fB/\fR. The CPU prints the current
+contents of the memory location \fI177522\fR (and of course you can
+enter any memory location). If you enter a new number after the \fB/\fR,
+this value is stored in memory, otherwise it is left unchanged. If the
+memory location does not exist (or in other words, the memory access
+causes a bus timeout), the CPU prints a \fB?\fR and ignores the command.
+.bP
+Proceed (continue) with program execution via \fBP\fR. The moment you
+enter the \fBP\fR, the CPU continues executing the program code starting
+at \fBPC\fR.
+.bP
+Run arbitrary code with \fI152010\fBG\fR where \fI152010\fR is the start
+address of the code. Again, the moment you type \fBG\fR, the CPU
+immediately starts executing the code.
+.bP
+A few more things that may or may not be implemented in this emulator.
+You can read more about it in the ODT section of the LSI-11 processor
+handbook.
+.
+.SH AUTHOR
+Written by unknown.
+.
+.SH "REPORTING BUGS"
+To report inaccuracies, general bugs, and deviations from the real
+DEC PDP-11/03's behavior, use the issue tracker at
+.UR https://github.com/hackyourlife/lsi-11
+.UE
