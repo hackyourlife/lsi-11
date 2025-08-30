@@ -96,9 +96,11 @@ typedef struct {
 	u8	input;
 	u8	state;
 	u8	next;
+	u8	last;
 	u8	buf[16];
 	u8	buf_r;
 	u8	buf_sz;
+	u8	reason;
 } KD11ODT;
 
 typedef struct KD11 KD11;

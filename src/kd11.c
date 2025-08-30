@@ -17,6 +17,13 @@
 #define	ODT_STATE_WR		7
 #define	ODT_STATE_SEMICOLON	8
 #define	ODT_STATE_ADDR_SC	9
+#define	ODT_STATE_DUMP_ADDR_0	10
+#define	ODT_STATE_DUMP_ADDR_1	11
+#define	ODT_STATE_DUMP_DATA	12
+
+#define	ODT_REASON_HALT		0
+#define	ODT_REASON_IRQ_NXM	1
+#define	ODT_REASON_DBLBUS	3
 
 /* CPU states */
 #define	STATE_HALT		0
@@ -151,6 +158,7 @@ void KD11Reset(KD11* kd11)
 	kd11->psw = 0;
 	kd11->trap = 0;
 	kd11->state = STATE_HALT;
+	kd11->odt.reason = ODT_REASON_HALT;
 	kd11->odt.state = ODT_STATE_INIT;
 }
 
@@ -198,7 +206,9 @@ static void KD11ODTInputError(KD11ODT* odt)
 
 void KD11ODTStep(KD11* kd11, QBUS* bus)
 {
-	/* odt */
+	/* FIXME: the manual states
+	 * "If the semicolon character is received during any character
+	 * sequence, the console ignores it." */
 	KD11ODT* odt = &kd11->odt;
 	switch(odt->state) {
 		case ODT_STATE_INIT:
@@ -211,6 +221,7 @@ void KD11ODTStep(KD11* kd11, QBUS* bus)
 			KD11ODTWrite(odt, '@');
 			odt->next = ODT_STATE_WAIT;
 			odt->state = ODT_STATE_WR;
+			odt->last = ODT_STATE_INIT;
 			break;
 		case ODT_STATE_WAIT:
 			if(READ(0177560) & 0x80) { /* ch available */
@@ -232,6 +243,39 @@ void KD11ODTStep(KD11* kd11, QBUS* bus)
 						odt->state = ODT_STATE_ADDR;
 						odt->addr = ((u8) c) - '0';
 						break;
+					case '/': /* open last location */
+						if(odt->last == ODT_STATE_VAL) {
+							u16 val = READ(odt->addr);
+							KD11ODTClear(odt);
+							if(bus->nxm) {
+								bus->nxm = 0;
+							} else {
+								KD11ODTWriteOctal(odt, val);
+								KD11ODTWrite(odt, ' ');
+								odt->next = ODT_STATE_VAL;
+								odt->state = ODT_STATE_WR;
+								odt->input = 0;
+								odt->val = 0;
+							}
+						} else if(odt->last == ODT_STATE_REG_VAL) {
+							u16 val;
+							if(odt->addr < 8) {
+								val = kd11->r[odt->addr];
+							} else {
+								val = kd11->psw;
+							}
+							KD11ODTClear(odt);
+							KD11ODTWriteOctal(odt, val);
+							KD11ODTWrite(odt, ' ');
+							odt->val = 0;
+							odt->next = ODT_STATE_REG_VAL;
+							odt->state = ODT_STATE_WR;
+							odt->input = 0;
+							odt->last = ODT_STATE_REG_VAL;
+						} else {
+							KD11ODTInputError(odt);
+						}
+						break;
 					case 'G':
 						KD11ODTClear(odt);
 						KD11ODTWrite(odt, '\r');
@@ -244,8 +288,20 @@ void KD11ODTStep(KD11* kd11, QBUS* bus)
 						odt->state = ODT_STATE_INIT;
 						kd11->state = STATE_RUN;
 						TRCCPUEvent(TRC_CPU_ODT_P, kd11->r[7]);
+					case 'M':
+						KD11ODTClear(odt);
+						KD11ODTWriteOctal(odt, 000210 | odt->reason);
+						KD11ODTWrite(odt, '\r');
+						KD11ODTWrite(odt, '\n');
+						KD11ODTWrite(odt, '@');
+						odt->next = ODT_STATE_WAIT;
+						odt->state = ODT_STATE_WR;
+						break;
 					case ';':
 						odt->state = ODT_STATE_SEMICOLON;
+						break;
+					case 023:
+						odt->state = ODT_STATE_DUMP_ADDR_0;
 						break;
 					default:
 						KD11ODTInputError(odt);
@@ -278,6 +334,7 @@ void KD11ODTStep(KD11* kd11, QBUS* bus)
 						odt->state = ODT_STATE_WR;
 						odt->input = 0;
 						odt->val = 0;
+						odt->last = ODT_STATE_VAL;
 					}
 				} else if(c >= '0' && c <= '7') {
 					odt->addr <<= 3;
@@ -294,6 +351,9 @@ void KD11ODTStep(KD11* kd11, QBUS* bus)
 				} else if(c == 'L') {
 					TRCCPUEvent(TRC_CPU_ODT_L, odt->addr);
 					/* TODO: size RAM instead of assuming 28K */
+					/* TODO: implement this in "microcode"
+					 * instead of putting the actual
+					 * bootstrap loader into memory */
 					WRITE(0157744, 0016701);
 					WRITE(0157746, 0000026);
 					WRITE(0157750, 0012702);
@@ -321,6 +381,10 @@ void KD11ODTStep(KD11* kd11, QBUS* bus)
 			break;
 		case ODT_STATE_REG:
 			if(READ(0177560) & 0x80) { /* ch available */
+				/* FIXME: the RUBOUT command cannot be used
+				 * while entering a register number. The RUBOUT
+				 * command will cause ODT to revert to memory
+				 * mode */
 				u16 ch = READ(0177562);
 				u8 c = (u8) ch;
 				WRITE(0177566, c);
@@ -406,6 +470,37 @@ void KD11ODTStep(KD11* kd11, QBUS* bus)
 						odt->state = ODT_STATE_WR;
 						odt->input = 0;
 					}
+				} else if(c == '_') {
+					u16 val;
+
+					val = READ(odt->addr);
+					if(bus->nxm) {
+						KD11ODTClear(odt);
+						bus->nxm = 0;
+						KD11ODTInputError(odt);
+						break;
+					}
+
+					odt->addr += val + 2;
+					odt->val = 0;
+					val = READ(odt->addr);
+
+					KD11ODTClear(odt);
+					if(bus->nxm) {
+						bus->nxm = 0;
+						KD11ODTInputError(odt);
+					} else {
+						KD11ODTWrite(odt, '\r');
+						KD11ODTWrite(odt, '\n');
+						KD11ODTWriteOctal(odt, odt->addr);
+						KD11ODTWrite(odt, '/');
+						KD11ODTWriteOctal(odt, val);
+						KD11ODTWrite(odt, ' ');
+
+						odt->next = ODT_STATE_VAL;
+						odt->state = ODT_STATE_WR;
+						odt->input = 0;
+					}
 				} else if(c == '@') {
 					u16 val;
 
@@ -451,6 +546,7 @@ void KD11ODTStep(KD11* kd11, QBUS* bus)
 					odt->next = ODT_STATE_REG_VAL;
 					odt->state = ODT_STATE_WR;
 					odt->input = 0;
+					odt->last = ODT_STATE_REG_VAL;
 				} else {
 					KD11ODTInputError(odt);
 				}
@@ -465,7 +561,9 @@ void KD11ODTStep(KD11* kd11, QBUS* bus)
 						|| c == '@' || c == '_') {
 					if(odt->input) {
 						if(odt->addr == 8) {
-							kd11->psw = odt->val;
+							/* this must not change the T bit */
+							u16 t = kd11->psw & PSW_T;
+							kd11->psw = (odt->val & ~PSW_T) | t;
 						} else {
 							kd11->r[odt->addr] = odt->val;
 						}
@@ -532,6 +630,19 @@ void KD11ODTStep(KD11* kd11, QBUS* bus)
 					odt->state = ODT_STATE_WR;
 					odt->input = 0;
 				} else if(c == '@') {
+					/* FIXME: handle RS properly */
+					/* The manual states:
+					 * If used on the PS, the command will
+					 * modify the PS if data has been typed
+					 * and close it; however, the last GPR
+					 * or memory loation contents will be
+					 * used as pointer.
+					 *
+					 * Unfortunately, this cannot easily be
+					 * implemented for now, since RS is not
+					 * its own state and therefore
+					 * overwrites addr/last.
+					 */
 					u16 val;
 
 					odt->val = 0;
@@ -588,6 +699,42 @@ void KD11ODTStep(KD11* kd11, QBUS* bus)
 					default:
 						KD11ODTInputError(odt);
 						break;
+				}
+			}
+			break;
+		case ODT_STATE_DUMP_ADDR_0:
+			if(READ(0177560) & 0x80) { /* ch available */
+				u16 c = READ(0177562);
+				odt->addr = c & 0377;
+				odt->state = ODT_STATE_DUMP_ADDR_1;
+			}
+			break;
+		case ODT_STATE_DUMP_ADDR_1:
+			if(READ(0177560) & 0x80) { /* ch available */
+				u16 c = READ(0177562);
+				odt->addr |= c << 8;
+				odt->next = 10;
+				odt->state = ODT_STATE_DUMP_DATA;
+			}
+			break;
+		case ODT_STATE_DUMP_DATA:
+			if(READ(0177564) & 0x80) {
+				u16 data = odt->val >> 8;
+				if(!(odt->next & 1)) {
+					odt->val = READ(odt->addr);
+					data = odt->val & 0377;
+				}
+				odt->addr++;
+				odt->next--;
+				WRITE(0177566, data);
+				if(odt->next == 0) {
+					KD11ODTClear(odt);
+					KD11ODTWrite(odt, '\r');
+					KD11ODTWrite(odt, '\n');
+					KD11ODTWrite(odt, '@');
+					odt->state = ODT_STATE_WR;
+					odt->next = ODT_STATE_WAIT;
+					odt->last = ODT_STATE_VAL;
 				}
 			}
 			break;
@@ -1192,6 +1339,7 @@ void KD11CPUStep(KD11* kd11, QBUS* bus)
 						case 0000000: /* HALT */
 							TRCCPUEvent(TRC_CPU_HALT, kd11->r[7]);
 							kd11->state = STATE_HALT;
+							kd11->odt.reason = ODT_REASON_HALT;
 							kd11->odt.state = ODT_STATE_INIT;
 							break;
 						case 0000001: /* WAIT */
@@ -2110,6 +2258,8 @@ void KD11HandleTraps(KD11* kd11, QBUS* bus)
 		TRCCPUEvent(TRC_CPU_DBLBUS, kd11->r[6]);
 		bus->nxm = 0;
 		kd11->state = STATE_HALT;
+		kd11->odt.state = ODT_STATE_INIT;
+		kd11->odt.reason = ODT_REASON_DBLBUS;
 		return;
 	}
 
@@ -2119,6 +2269,8 @@ void KD11HandleTraps(KD11* kd11, QBUS* bus)
 		TRCCPUEvent(TRC_CPU_DBLBUS, kd11->r[6]);
 		bus->nxm = 0;
 		kd11->state = STATE_HALT;
+		kd11->odt.state = ODT_STATE_INIT;
+		kd11->odt.reason = ODT_REASON_DBLBUS;
 		return;
 	}
 
@@ -2127,6 +2279,8 @@ void KD11HandleTraps(KD11* kd11, QBUS* bus)
 		TRCCPUEvent(TRC_CPU_DBLBUS, trap);
 		bus->nxm = 0;
 		kd11->state = STATE_HALT;
+		kd11->odt.state = ODT_STATE_INIT;
+		kd11->odt.reason = ODT_REASON_IRQ_NXM;
 		return;
 	}
 
@@ -2135,6 +2289,8 @@ void KD11HandleTraps(KD11* kd11, QBUS* bus)
 		TRCCPUEvent(TRC_CPU_DBLBUS, trap + 2);
 		bus->nxm = 0;
 		kd11->state = STATE_HALT;
+		kd11->odt.state = ODT_STATE_INIT;
+		kd11->odt.reason = ODT_REASON_IRQ_NXM;
 		return;
 	}
 
