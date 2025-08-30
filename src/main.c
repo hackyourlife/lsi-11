@@ -648,16 +648,16 @@ int main(int argc, char** argv)
 			char c;
 			if(read(0, &c, 1) != 1) {
 				fprintf(stderr, "Error: failed to receive 1 byte\n");
-			}
-
-			if(no_sigint && c == 5) {
-				running = 0;
-			}
+			} else {
+				if(no_sigint && c == 5) {
+					running = 0;
+				}
 #ifdef DEBUG
-			if(c == '\n')
-				c = '\r';
+				if(c == '\n')
+					c = '\r';
 #endif
-			DLV11JSend(&dlv11, 3, c);
+				DLV11JSend(&dlv11, 3, c);
+			}
 		}
 
 		if(delay++ >= 500 && console_in && *console_in) {
