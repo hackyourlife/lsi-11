@@ -5669,9 +5669,9 @@ Address	Octal Code	Assembler Syntax
 \&.	.		.
 \&.	.		.
 \&.	.		.
-076410	016701		MOV TEMP1, R1	; Restore R1
+076410	016701		MOV TEMP1, R1 ; Restore R1
 076412	000006		*
-076414	016702		MOV TEMP2, R2	; Restore R2
+076414	016702		MOV TEMP2, R2 ; Restore R2
 076416	000004		*
 076420	000207		RTS PC
 076422	000000		TEMP1: 0
@@ -5686,8 +5686,8 @@ OR: Using a Stack
 .P
 .TS
 center;
-l l s l
-l l c l.
+l l s l s
+l l c l l.
 Address	Octal Code	Assembler Syntax
 
 010020	010143	SUBR:	MOV R1, -(R3)	; push R1
@@ -5809,7 +5809,7 @@ Address	Assembler Syntax	Octal Code
 001000	JSR R5, SUBR	004567
 001002	index constant for SUBR	000060
 
-001064	SUBR	MOV A, B	0lnnmm
+001064	SUBR: MOV A, B	0lnnmm
 .TE
 .FIG 5-7 "JSR using R5"
 .
@@ -8021,7 +8021,7 @@ HALT	 5.30
 RESET	 5.95 + 10.0 \*(musec for INIT + 90.0 \*(musec
 
 MAINT INSTR. (00021R)	20.30
-RSRVD INSTR. (00022N)	 5.95	(TO GET TO UADDRESS 3000)
+RSRVD INSTR. (00022N)	 5.95  (TO GET TO UADDRESS 3000)
 _
 .TE
 .IP * 2
